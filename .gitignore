@@ -1,0 +1,38 @@
+# Executables and build outputs
+*.exe
+*.exe animate
+*.exe.stackdump
+*.bin
+*.out
+*.app
+bin/
+dist/
+build/
+
+# IDE & Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Go test outputs and coverage reports
+*.test
+*.prof
+*.out
+coverage.html
+coverage.txt
+
+# Local Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Dependency directories (if vendoring locally)
+vendor/
+
+# Temporary files and logs
+*.log
+tmp/
+.tmp/
