@@ -10,6 +10,12 @@ import (
 type Authenticator[T any] interface {
 	Middleware() gin.HandlerFunc
 
+	//lenient optional auth:
+    //missing token→ guest
+    // bad token→ guest
+	// no token->guest
+	OptionalMiddleware() gin.HandlerFunc
+
 	// Login creates an access JWT and opaque refresh token,
 	// stores the refresh session in Redis, and sets both cookies.
 	Login(c *gin.Context, payload T) error
@@ -20,6 +26,9 @@ type Authenticator[T any] interface {
 
 	// Logout revokes the current refresh token and clears both cookies.
 	Logout(c *gin.Context) error
+
+	Payload(c *gin.Context) (T, bool)
+	MustPayload(c *gin.Context) T
 }
 
 func New[T any](

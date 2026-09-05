@@ -14,8 +14,8 @@ import (
 
 	"github.com/abdelrahmanAhmed1x/core/httpx"
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 	golangjwt "github.com/golang-jwt/jwt/v5"
+	"github.com/redis/go-redis/v9"
 )
 
 // Middleware validates the access JWT and stores its strongly typed payload
@@ -32,6 +32,26 @@ func (m *manager[T]) Middleware() gin.HandlerFunc {
 		if err != nil {
 			httpx.AbortUnauthorized(c, "Invalid or expired access token")
 			return
+		}
+
+		c.Set(payloadContextKey, payload)
+
+		c.Next()
+	}
+}
+
+func (m *manager[T]) OptionalMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, err := c.Cookie(accessCookieName)
+		if err != nil {
+			c.Next()
+			return
+		}
+
+		payload, err := m.parseAccessToken(token)
+		if err != nil {
+			c.Next()
+			return 
 		}
 
 		c.Set(payloadContextKey, payload)
@@ -355,7 +375,7 @@ func (m *manager[T]) Logout(c *gin.Context) error {
 
 // ExtractPayload retrieves the authenticated payload placed into the
 // Gin context by Middleware.
-func ExtractPayload[T any](c *gin.Context) (T, bool) {
+func (m *manager[T]) Payload(c *gin.Context) (T, bool) {
 	var zero T
 
 	value, exists := c.Get(payloadContextKey)
@@ -375,8 +395,8 @@ func ExtractPayload[T any](c *gin.Context) (T, bool) {
 // authentication middleware has not populated it or T is incorrect.
 //
 // Use only on routes protected by Authenticator.Middleware().
-func MustExtractPayload[T any](c *gin.Context) T {
-	payload, ok := ExtractPayload[T](c)
+func (m *manager[T]) MustPayload(c *gin.Context) T {
+	payload, ok := m.Payload(c)
 	if !ok {
 		panic("jwt: authenticated payload missing from context")
 	}
