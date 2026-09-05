@@ -33,9 +33,57 @@ func AbortUnauthorized(c *gin.Context, message string) {
 func AbortForbidden(c *gin.Context, message string) {
 	abortWithError(c, http.StatusForbidden, "FORBIDDEN", message, nil)
 }
+// AbortMethodNotAllowed halts with 405 Method Not Allowed.
+func AbortMethodNotAllowed(c *gin.Context, message string) {
+	abortWithError(
+		c,
+		http.StatusMethodNotAllowed,
+		"METHOD_NOT_ALLOWED",
+		message,
+		nil,
+	)
+}
+// AbortConflict halts with 409 Conflict.
+func AbortConflict(c *gin.Context, message string, details any) {
+	abortWithError(
+		c,
+		http.StatusConflict,
+		"CONFLICT",
+		message,
+		details,
+	)
+}
+// AbortUnprocessableEntity halts with 422 Unprocessable Entity.
+func AbortUnprocessableEntity(c *gin.Context, message string, details any) {
+	abortWithError(
+		c,
+		http.StatusUnprocessableEntity,
+		"UNPROCESSABLE_ENTITY",
+		message,
+		details,
+	)
+}
 
-func AbortTooManyRequests(c *gin.Context){
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{})
+// AbortTooManyRequests halts with 429 Too Many Requests.
+func AbortTooManyRequests(c *gin.Context) {
+	abortWithError(
+		c,
+		http.StatusTooManyRequests,
+		"TOO_MANY_REQUESTS",
+		"Rate limit exceeded",
+		nil,
+	)
+}
+
+// AbortGatewayTimeout halts with 504 Gateway Timeout.
+func AbortGatewayTimeout(c *gin.Context, message string) {
+	abortWithError(
+		c,
+		http.StatusGatewayTimeout,
+		"GATEWAY_TIMEOUT",
+		message,
+		nil,
+	)
 }
 
 // AbortNotFound halts with 404 Not Found.
