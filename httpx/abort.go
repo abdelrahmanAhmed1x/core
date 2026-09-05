@@ -34,6 +34,10 @@ func AbortForbidden(c *gin.Context, message string) {
 	abortWithError(c, http.StatusForbidden, "FORBIDDEN", message, nil)
 }
 
+func AbortTooManyRequests(c *gin.Context){
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{})
+}
+
 // AbortNotFound halts with 404 Not Found.
 func AbortNotFound(c *gin.Context, message string) {
 	abortWithError(c, http.StatusNotFound, "NOT_FOUND", message, nil)

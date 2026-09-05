@@ -28,10 +28,10 @@ type Config struct {
 
 // Only exported interface in the package
 type Authenticator[T any] interface {
-	Middleware() gin.HandlerFunc   // authenticate middleware 
-	Login(c *gin.Context, payload T) error  // takes the payload creates the tokens and then puts them in cookies 
-	Refresh(c *gin.Context) error  // uses refresh tokens to re generate new access and refresh 
-	Logout(c *gin.Context)   // clears token from cookies 
+	Middleware() gin.HandlerFunc           // authenticate middleware
+	Login(c *gin.Context, payload T) error // takes the payload creates the tokens and then puts them in cookies
+	Refresh(c *gin.Context) error          // uses refresh tokens to re generate new access and refresh
+	Logout(c *gin.Context)                 // clears token from cookies
 }
 
 type manager[T any] struct {
@@ -90,7 +90,7 @@ func (m *manager[T]) parseToken(
 		tokenStr,
 		&customClaims[T]{},
 		func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			if t.Method != jwt.SigningMethodHS256 {
 				return nil, ErrInvalidToken
 			}
 			return []byte(m.cfg.SecretKey), nil
