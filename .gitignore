@@ -23,6 +23,7 @@ build/
 *.out
 coverage.html
 coverage.txt
+!docs/reports/coverage.txt
 
 # Local Environment & Secrets
 .env
