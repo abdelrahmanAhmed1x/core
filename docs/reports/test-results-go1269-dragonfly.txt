@@ -1,0 +1,24 @@
+ok  	github.com/abdelrahmanAhmed1x/core/auth/internal/token	1.061s
+ok  	github.com/abdelrahmanAhmed1x/core/auth/jwt	1.166s
+ok  	github.com/abdelrahmanAhmed1x/core/auth/single	1.015s
+ok  	github.com/abdelrahmanAhmed1x/core/auth/stateful	2.133s
+ok  	github.com/abdelrahmanAhmed1x/core/auth/stateless	1.021s
+ok  	github.com/abdelrahmanAhmed1x/core/auth/transport	1.030s
+ok  	github.com/abdelrahmanAhmed1x/core/authorization	1.026s
+ok  	github.com/abdelrahmanAhmed1x/core/cache	1.467s
+?   	github.com/abdelrahmanAhmed1x/core/cache/memory	[no test files]
+?   	github.com/abdelrahmanAhmed1x/core/cache/redis	[no test files]
+?   	github.com/abdelrahmanAhmed1x/core/cache/tiered	[no test files]
+?   	github.com/abdelrahmanAhmed1x/core/examples/auth	[no test files]
+?   	github.com/abdelrahmanAhmed1x/core/examples/cache	[no test files]
+?   	github.com/abdelrahmanAhmed1x/core/examples/server	[no test files]
+ok  	github.com/abdelrahmanAhmed1x/core/health	1.059s
+ok  	github.com/abdelrahmanAhmed1x/core/httpclient	1.061s
+ok  	github.com/abdelrahmanAhmed1x/core/httpx	1.025s
+?   	github.com/abdelrahmanAhmed1x/core/internal/testredis	[no test files]
+ok  	github.com/abdelrahmanAhmed1x/core/lifecycle	1.038s
+ok  	github.com/abdelrahmanAhmed1x/core/logger	1.023s
+ok  	github.com/abdelrahmanAhmed1x/core/middleware	1.022s
+ok  	github.com/abdelrahmanAhmed1x/core/observability	1.018s
+ok  	github.com/abdelrahmanAhmed1x/core/pagination	1.015s
+ok  	github.com/abdelrahmanAhmed1x/core/ratelimiter	1.824s

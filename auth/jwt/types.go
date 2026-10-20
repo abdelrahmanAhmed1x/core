@@ -2,8 +2,8 @@ package jwt
 
 import (
 	"errors"
+	golangjwt "github.com/golang-jwt/jwt/v5"
 	"time"
-		golangjwt "github.com/golang-jwt/jwt/v5"
 )
 
 const (
@@ -24,6 +24,7 @@ var (
 )
 
 type claims[T any] struct {
-	Payload T `json:"payload"`
+	Payload T      `json:"payload"`
+	Type    string `json:"token_type,omitempty"`
 	golangjwt.RegisteredClaims
 }

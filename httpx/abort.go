@@ -9,6 +9,10 @@ import (
 
 // AbortWithError halts the request chain with a standardized JSON error envelope.
 func abortWithError(c *gin.Context, status int, code, message string, details any) {
+	if c.Writer.Written() {
+		c.Abort()
+		return
+	}
 	c.AbortWithStatusJSON(status, response[any]{
 		Success: false,
 		Error: &errorItem{
@@ -33,6 +37,7 @@ func AbortUnauthorized(c *gin.Context, message string) {
 func AbortForbidden(c *gin.Context, message string) {
 	abortWithError(c, http.StatusForbidden, "FORBIDDEN", message, nil)
 }
+
 // AbortMethodNotAllowed halts with 405 Method Not Allowed.
 func AbortMethodNotAllowed(c *gin.Context, message string) {
 	abortWithError(
@@ -43,6 +48,7 @@ func AbortMethodNotAllowed(c *gin.Context, message string) {
 		nil,
 	)
 }
+
 // AbortConflict halts with 409 Conflict.
 func AbortConflict(c *gin.Context, message string, details any) {
 	abortWithError(
@@ -53,6 +59,7 @@ func AbortConflict(c *gin.Context, message string, details any) {
 		details,
 	)
 }
+
 // AbortUnprocessableEntity halts with 422 Unprocessable Entity.
 func AbortUnprocessableEntity(c *gin.Context, message string, details any) {
 	abortWithError(
@@ -94,7 +101,7 @@ func AbortNotFound(c *gin.Context, message string) {
 // AbortInternal logs the internal error safely and halts with 500 without leaking details.
 func AbortInternal(c *gin.Context, err error) {
 	if err != nil {
-		slog.Error("Internal server error", "error", err, "path", c.Request.URL.Path)
+		slog.Error("Internal server error", "route", c.FullPath())
 	}
 	abortWithError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "An unexpected error occurred", nil)
 }

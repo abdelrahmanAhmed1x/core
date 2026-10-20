@@ -15,10 +15,12 @@ var sensitiveKeys = map[string]struct{}{
 	"secret":        {},
 	"authorization": {},
 	"cookie":        {},
+	"set-cookie":    {}, "api_key": {}, "apikey": {}, "signing_key": {}, "secret_key": {}, "session": {}, "session_token": {},
 }
 
 type maskingHandler struct {
 	slog.Handler
+	all bool
 }
 
 func (m *maskingHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -33,6 +35,13 @@ func (m *maskingHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (m *maskingHandler) maskAttr(a slog.Attr) slog.Attr {
+	if m.all {
+		return slog.String(a.Key, "[REDACTED]")
+	}
+	if _, ok := sensitiveKeys[strings.ToLower(a.Key)]; ok {
+		return slog.String(a.Key, "[REDACTED]")
+	}
+	a.Value = a.Value.Resolve()
 	if a.Value.Kind() == slog.KindGroup {
 		attrs := a.Value.Group()
 		masked := make([]slog.Attr, len(attrs))
@@ -55,4 +64,15 @@ func convertToAnySlice(attrs []slog.Attr) []any {
 		anys[i] = v
 	}
 	return anys
+}
+func (m *maskingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	masked := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		masked[i] = m.maskAttr(a)
+	}
+	return &maskingHandler{Handler: m.Handler.WithAttrs(masked), all: m.all}
+}
+func (m *maskingHandler) WithGroup(name string) slog.Handler {
+	_, sensitive := sensitiveKeys[strings.ToLower(name)]
+	return &maskingHandler{Handler: m.Handler.WithGroup(name), all: m.all || sensitive}
 }

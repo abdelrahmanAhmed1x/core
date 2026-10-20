@@ -19,6 +19,12 @@ func Middleware(l Logger) gin.HandlerFunc {
 
 		// 1. Get or generate Request ID
 		reqID := c.GetHeader(HeaderXRequestID)
+		if id := c.Writer.Header().Get(HeaderXRequestID); id != "" {
+			reqID = id
+		}
+		if len(reqID) > 128 {
+			reqID = ""
+		}
 		if reqID == "" {
 			reqID = generateTraceID()
 		}
@@ -38,13 +44,13 @@ func Middleware(l Logger) gin.HandlerFunc {
 		args := []any{
 			"status", status,
 			"method", c.Request.Method,
-			"path", c.Request.URL.Path,
-			"ip", c.ClientIP(),
+			"route", c.FullPath(),
+
 			"latency_ms", latency.Milliseconds(),
 		}
 
 		if len(c.Errors) > 0 {
-			args = append(args, "errors", c.Errors.String())
+			args = append(args, "errors", len(c.Errors))
 		}
 
 		switch {
@@ -64,6 +70,8 @@ func ContextWithRequestID(ctx context.Context, reqID string) context.Context {
 
 func generateTraceID() string {
 	b := make([]byte, 8)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("logger: random source failure")
+	}
 	return hex.EncodeToString(b)
 }

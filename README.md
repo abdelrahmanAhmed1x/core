@@ -1,858 +1,778 @@
 # Core
 
-`core` is a lightweight, production-grade Go toolkit designed for building robust, scalable web applications and microservices with [Gin](https://github.com/gin-gonic/gin). It provides generic HTTP response envelopes, automatic request binding and validation, context-aware `slog` logging with sensitive data masking, Redis-backed JWT cookie authentication with atomic refresh rotation, distributed rate limiting, HTTP security middlewares, and generic pagination utilities.
+Independent Go packages for authentication, caching, HTTP APIs, and service utilities.
+Import only what your application needs. Requires Go 1.26.5 or later; use a patched toolchain for deployment.
 
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Package Overview](#package-overview)
-- [Packages & Usage](#packages--usage)
-  - [1. `httpx` — Standardized HTTP Responses, Request Binders & Errors](#1-httpx--standardized-http-responses-request-binders--errors)
-  - [2. `auth/jwt` — Redis-Backed Cookie JWT Authenticator](#2-authjwt--redis-backed-cookie-jwt-authenticator)
-  - [3. `logger` — Context-Aware Structured Logging & Tracing](#3-logger--context-aware-structured-logging--tracing)
-  - [4. `middleware` — Production HTTP Security & Control Middlewares](#4-middleware--production-http-security--control-middlewares)
-  - [5. `pagination` — Generic Request & Response Pagination](#5-pagination--generic-request--response-pagination)
-  - [6. `ratelimiter` — Redis-Backed Distributed Rate Limiting](#6-ratelimiter--redis-backed-distributed-rate-limiting)
-- [Complete Full-Server Example](#complete-full-server-example)
-- [License](#license)
-
----
-
-## Features
-
-- **Generic HTTP Envelopes (`httpx`)**: Consistent JSON structure for success and error responses across all APIs.
-- **Auto Binders & Validation (`httpx`)**: Generic helpers for JSON, URI, and Query string binding with automatic validation error formatting.
-- **Secure JWT Auth (`auth/jwt`)**: HttpOnly cookie-based JWT access tokens coupled with 256-bit opaque refresh tokens stored in Redis with atomic `GETDEL` single-use rotation.
-- **Context-Aware Logging (`logger`)**: `slog`-backed structured logger with request ID tracing, user context tracking, automatic sensitive key redacting (`password`, `token`, `secret`, etc.), and Gin access logging middleware.
-- **Essential Security Middlewares (`middleware`)**: Configurable CORS, body size limits (`MaxBodySize`), security headers, request ID generation, and context timeout enforcement.
-- **Type-Safe Pagination (`pagination`)**: Automatic binding for `page` & `limit`, database offset calculation (`Offset()`), and generic response result wrapping with total page math.
-- **Redis Rate Limiting (`ratelimiter`)**: Sliding window rate limiting powered by `go-redis/redis_rate` with custom key extractors (e.g., IP, User ID) and configurable fail-open / fail-closed modes.
-
----
-
-## Installation
-
-```bash
+```sh
 go get github.com/abdelrahmanAhmed1x/core
 ```
 
-**Requirements:** Go 1.26 or higher (uses Go generics and standard library `log/slog`).
+## Packages
 
----
+| Package | What it does | When to use it |
+|---|---|---|
+| [`auth/stateful`](#auth-stateful) | Opaque stored sessions | Web/mobile logout and revocation |
+| [`auth/jwt`](#auth-jwt) | JWT access + stored refresh | JWT APIs with persistent login |
+| [`auth/stateless`](#auth-stateless) | JWT access + JWT refresh | No store; accept revocation limits |
+| [`auth/single`](#auth-single) | One expiring JWT | Small APIs without refresh |
+| [`auth/transport`](#auth-transport) | Cookie/bearer helpers | Web/mobile credential delivery |
+| [`cache`](#cache) | Cache loaders and codecs | Avoid repeated source queries |
+| [`cache/memory`](#cache-memory) | In-process cache | One process or local hot data |
+| [`cache/redis`](#cache-redis) | Redis/DragonflyDB cache | Share values across instances |
+| [`cache/tiered`](#cache-tiered) | Memory then Redis | Fast reads with brief local staleness |
+| [`authorization`](#authorization) | Roles and permissions | Protected application actions |
+| [`httpx`](#httpx) | Binding and JSON responses | Consistent Gin handlers |
+| [`logger`](#logger) | Contextual slog logging | Service/access logs |
+| [`middleware`](#middleware) | CORS, IDs, limits, deadlines | Shared API request handling |
+| [`pagination`](#pagination) | Page/limit helpers | Paginated list endpoints |
+| [`ratelimiter`](#ratelimiter) | Shared request quotas | Abuse protection |
+| [`health`](#health) | Liveness/readiness | Deployment health probes |
+| [`httpclient`](#httpclient) | HTTP retry and timeout helpers | External API calls |
+| [`observability`](#observability) | Optional OTel instrumentation | Metrics and tracing |
+| [`lifecycle`](#lifecycle) | Ordered cleanup | Graceful service shutdown |
 
-## Package Overview
+## Quick start
 
-| Package | Import Path | Description |
-| :--- | :--- | :--- |
-| **`httpx`** | `github.com/abdelrahmanAhmed1x/core/httpx` | Standardized JSON response envelopes, generic request binders (JSON, URI, Query), and HTTP error abort helpers. |
-| **`auth/jwt`** | `github.com/abdelrahmanAhmed1x/core/auth/jwt` | Cookie-based JWT authenticator with Redis-backed opaque refresh token rotation and generic payload support. |
-| **`logger`** | `github.com/abdelrahmanAhmed1x/core/logger` | `slog`-backed structured logger with request tracing, automatic sensitive field redaction, and Gin middleware. |
-| **`middleware`** | `github.com/abdelrahmanAhmed1x/core/middleware` | Essential HTTP middlewares: CORS, body size limit, security headers, request ID, and request timeout. |
-| **`pagination`** | `github.com/abdelrahmanAhmed1x/core/pagination` | Generic pagination query binding (`page`, `limit`), database offset calculation, and paginated response builders. |
-| **`ratelimiter`** | `github.com/abdelrahmanAhmed1x/core/ratelimiter` | Redis-backed sliding window rate limiter middleware supporting custom keys (e.g. IP, User ID) and fail-open/closed modes. |
+The snippets are fragments for your existing application, not separate servers.
+Import the package named in each section under `github.com/abdelrahmanAhmed1x/core/`.
+Use alias `hybrid` for `auth/jwt` and `rediscache` for `cache/redis`.
+Shared standard imports are `context`, `time`, and (for outbound HTTP) `net/http`;
+Gin routes use `github.com/gin-gonic/gin`.
 
----
-
-## Packages & Usage
-
-### 1. `httpx` — Standardized HTTP Responses, Request Binders & Errors
-
-The `httpx` package ensures a consistent API JSON response structure across your application, eliminating boilerplate code for request parsing, validation, and error handling.
-
-#### Standardized JSON Envelopes
-
-**Success Response Envelope (`200 OK`, `201 Created`):**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "usr_123",
-    "name": "John Doe"
-  }
-}
-```
-
-**Error Response Envelope (`400`, `401`, `404`, `500`, etc.):**
-```json
-{
-  "success": false,
-  "error": {
-    "code": "BAD_REQUEST",
-    "message": "Invalid request payload",
-    "details": {
-      "Email": "required",
-      "Age": "min"
-    }
-  }
-}
-```
-
-#### Code Example
-
+<!-- example:models -->
 ```go
-package main
-
-import (
-	"errors"
-
-	"github.com/abdelrahmanAhmed1x/core/httpx"
-	"github.com/gin-gonic/gin"
-)
-
-type CreateUserRequest struct {
-	Name  string `json:"name" binding:"required"`
-	Email string `json:"email" binding:"required,email"`
+type User struct {
+	ID   int64  `json:"id"`
+	Role string `json:"role"`
 }
-
-type UserURIParam struct {
-	ID string `uri:"id" binding:"required"`
-}
-
-type UserSearchQuery struct {
-	Query string `form:"q" binding:"required"`
-}
-
-func createUserHandler(c *gin.Context) {
-	// 1. Bind and validate JSON body (automatically calls AbortBadRequest on validation error)
-	req, ok := httpx.BindJSON[CreateUserRequest](c)
-	if !ok {
-		return // Request was automatically aborted with 400 Bad Request
-	}
-
-	// 2. Return 201 Created wrapped in standardized JSON envelope
-	httpx.Created(c, gin.H{
-		"id":    "usr_100",
-		"name":  req.Name,
-		"email": req.Email,
-	})
-}
-
-func getUserHandler(c *gin.Context) {
-	// Bind path parameters (e.g. GET /users/:id)
-	params, ok := httpx.BindURI[UserURIParam](c)
-	if !ok {
-		return
-	}
-
-	if params.ID == "unknown" {
-		httpx.AbortNotFound(c, "User not found")
-		return
-	}
-
-	httpx.OK(c, gin.H{"id": params.ID, "name": "Alice"})
-}
-
-func searchUsersHandler(c *gin.Context) {
-	// Bind URL query parameters (e.g. GET /users/search?q=alice)
-	query, ok := httpx.BindQuery[UserSearchQuery](c)
-	if !ok {
-		return
-	}
-
-	httpx.OK(c, gin.H{"query": query.Query, "results": []string{"Alice"}})
-}
-
-func deleteUserHandler(c *gin.Context) {
-	// Return 204 No Content (no body)
-	httpx.NoContent(c)
-}
-
-func triggerErrorHandlers(c *gin.Context) {
-	// Examples of other error abort helpers:
-	_ = func() {
-		httpx.AbortUnauthorized(c, "Authentication required")
-		httpx.AbortForbidden(c, "Permission denied")
-		httpx.AbortMethodNotAllowed(c, "Method not allowed on this endpoint")
-		httpx.AbortConflict(c, "Email already in use", gin.H{"field": "email"})
-		httpx.AbortUnprocessableEntity(c, "Cannot process payload", nil)
-		httpx.AbortTooManyRequests(c)
-		httpx.AbortGatewayTimeout(c, "Upstream service timeout")
-		httpx.AbortInternal(c, errors.New("database connection failed")) // logs error safely, hides details from client
-	}
-}
-
-func main() {
-	r := gin.Default()
-	r.POST("/users", createUserHandler)
-	r.GET("/users/:id", getUserHandler)
-	r.GET("/users/search", searchUsersHandler)
-	r.DELETE("/users/:id", deleteUserHandler)
-	r.Run(":8080")
-}
-```
-
-#### API Reference
-
-- **Success Responses**:
-  - `httpx.OK[T](c *gin.Context, data T)` — Sends HTTP `200 OK` wrapped in `{"success": true, "data": T}`.
-  - `httpx.Created[T](c *gin.Context, data T)` — Sends HTTP `201 Created` wrapped in `{"success": true, "data": T}`.
-  - `httpx.NoContent(c *gin.Context)` — Sends HTTP `204 No Content` without a body.
-- **Request Binders**:
-  - `httpx.BindJSON[T](c *gin.Context) (T, bool)` — Binds JSON request body to `T`. Automatically aborts with HTTP `400` on failure.
-  - `httpx.BindURI[T](c *gin.Context) (T, bool)` — Binds route URI parameters (tagged `uri:"..."`) to `T`. Automatically aborts with HTTP `400` on failure.
-  - `httpx.BindQuery[T](c *gin.Context) (T, bool)` — Binds URL query string parameters (tagged `form:"..."`) to `T`. Automatically aborts with HTTP `400` on failure.
-- **Error Abort Helpers**:
-  - `httpx.AbortBadRequest(c, message, details)` — HTTP `400 Bad Request`
-  - `httpx.AbortUnauthorized(c, message)` — HTTP `401 Unauthorized`
-  - `httpx.AbortForbidden(c, message)` — HTTP `403 Forbidden`
-  - `httpx.AbortNotFound(c, message)` — HTTP `404 Not Found`
-  - `httpx.AbortMethodNotAllowed(c, message)` — HTTP `405 Method Not Allowed`
-  - `httpx.AbortConflict(c, message, details)` — HTTP `409 Conflict`
-  - `httpx.AbortUnprocessableEntity(c, message, details)` — HTTP `422 Unprocessable Entity`
-  - `httpx.AbortTooManyRequests(c)` — HTTP `429 Too Many Requests`
-  - `httpx.AbortGatewayTimeout(c, message)` — HTTP `504 Gateway Timeout`
-  - `httpx.AbortInternal(c, err)` — HTTP `500 Internal Server Error` (logs the internal error via `slog.Error` and sends a generic client response).
-
----
-
-### 2. `auth/jwt` — Redis-Backed Cookie JWT Authenticator
-
-The `auth/jwt` package provides a secure, cookie-based JWT authentication manager backed by Redis. It issues short-lived JWT access tokens in HttpOnly cookies and stores SHA-256 hashed 256-bit opaque refresh tokens in Redis for atomic single-use rotation via `GETDEL`. It supports custom strongly-typed generic payload structs `T`.
-
-#### Architecture & Security Features
-
-- **Access Tokens**: Encoded as HS256 JWTs stored in `access_token` HttpOnly cookies.
-- **Refresh Tokens**: High-entropy 256-bit random tokens stored in `refresh_token` HttpOnly cookies.
-- **Redis Security**: Redis stores only the SHA-256 hash of refresh tokens (`auth:<issuer>:refresh:<hash>`).
-- **Atomic Rotation**: Refresh operations call Redis `GETDEL` atomically. Once refreshed, the old refresh token is deleted immediately.
-
-#### Code Example
-
-```go
-package main
-
-import (
-	"net/http"
-	"time"
-
-	"github.com/abdelrahmanAhmed1x/core/auth/jwt"
-	"github.com/abdelrahmanAhmed1x/core/httpx"
-	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
-)
-
-// UserSession defines the custom payload embedded inside JWT access tokens and Redis refresh sessions.
-type UserSession struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
-}
-
-func main() {
-	// 1. Initialize Redis Client
-	rdb := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-	})
-
-	// 2. Initialize JWT Authenticator
-	authManager := jwt.New[UserSession](rdb, jwt.Config{
-		SecretKey:        "super-secret-key-at-least-32-bytes-long!", // Min 32 bytes for HS256
-		Issuer:           "my-app",
-		AccessTTL:        15 * time.Minute,
-		RefreshTTL:       7 * 24 * time.Hour,
-		CookieDomain:     "localhost",
-		CookiePath:       "/",
-		CookieSecure:     false, // Set true in production (HTTPS)
-		CookieSameSite:   http.SameSiteLaxMode,
-		RefreshTokenPath: "/auth", // Scope refresh cookie to /auth routes
-	})
-
-	r := gin.Default()
-
-	// Auth group
-	authGroup := r.Group("/auth")
-	{
-		// Login endpoint
-		authGroup.POST("/login", func(c *gin.Context) {
-			session := UserSession{
-				UserID: "usr_42",
-				Email:  "user@example.com",
-				Role:   "admin",
-			}
-
-			// Login issues JWT access token and opaque refresh token in HttpOnly cookies
-			if err := authManager.Login(c, session); err != nil {
-				httpx.AbortInternal(c, err)
-				return
-			}
-
-			httpx.OK(c, gin.H{"message": "Login successful"})
-		})
-
-		// Refresh token endpoint (rotates access and refresh tokens)
-		authGroup.POST("/refresh", func(c *gin.Context) {
-			if err := authManager.Refresh(c); err != nil {
-				httpx.AbortUnauthorized(c, "Invalid or expired refresh token")
-				return
-			}
-
-			httpx.OK(c, gin.H{"message": "Token refreshed successfully"})
-		})
-
-		// Logout endpoint
-		authGroup.POST("/logout", func(c *gin.Context) {
-			if err := authManager.Logout(c); err != nil {
-				// Redis deletion error if any; cookies are still cleared safely
-			}
-
-			httpx.OK(c, gin.H{"message": "Logged out successfully"})
-		})
-	}
-
-	// Strictly protected routes (requires valid access_token cookie)
-	protected := r.Group("/api", authManager.Middleware())
-	{
-		protected.GET("/profile", func(c *gin.Context) {
-			// Extract typed payload from context (panics if not authenticated)
-			payload := authManager.MustPayload(c)
-
-			httpx.OK(c, gin.H{
-				"user_id": payload.UserID,
-				"email":   payload.Email,
-				"role":    payload.Role,
-			})
-		})
-	}
-
-	// Optional authentication routes (allows guests and authenticated users)
-	optional := r.Group("/public")
-	optional.Use(authManager.OptionalMiddleware())
-	{
-		optional.GET("/feed", func(c *gin.Context) {
-			payload, ok := authManager.Payload(c)
-			if !ok {
-				httpx.OK(c, gin.H{"mode": "guest", "content": "Public Feed"})
-				return
-			}
-
-			httpx.OK(c, gin.H{"mode": "authenticated", "user_id": payload.UserID})
-		})
-	}
-
-	r.Run(":8080")
-}
-```
-
-#### API Reference
-
-- **Constructor**:
-  - `jwt.New[T](client redis.UniversalClient, cfg jwt.Config) jwt.Authenticator[T]` — Instantiates a JWT authenticator. Panics if `client` is nil or `cfg` validation fails.
-- **`Authenticator[T]` Interface**:
-  - `Middleware() gin.HandlerFunc` — Gin middleware requiring valid `access_token` cookie. Aborts with `401 Unauthorized` if missing/invalid.
-  - `OptionalMiddleware() gin.HandlerFunc` — Gin middleware attempting to parse `access_token`. Proceeds as guest if missing or invalid.
-  - `Login(c *gin.Context, payload T) error` — Issues access and refresh tokens, saves refresh session hash in Redis, sets HttpOnly cookies.
-  - `Refresh(c *gin.Context) error` — Atomically consumes existing refresh token from Redis and rotates token pair.
-  - `Logout(c *gin.Context) error` — Deletes refresh token from Redis and clears both cookies.
-  - `Payload(c *gin.Context) (T, bool)` — Retrieves typed payload from `gin.Context`.
-  - `MustPayload(c *gin.Context) T` — Retrieves typed payload or panics if unpopulated.
-- **`Config` Options**:
-  - `SecretKey` *(string, required)* — Secret key for signing JWTs (must be at least 32 bytes).
-  - `Issuer` *(string, required)* — JWT issuer claim string.
-  - `AccessTTL` *(time.Duration)* — Access token lifespan (default: `15m`).
-  - `RefreshTTL` *(time.Duration)* — Refresh token lifespan (default: `7d`).
-  - `CookieDomain` *(string)* — Cookie domain.
-  - `CookiePath` *(string)* — Cookie path (default: `"/"`).
-  - `CookieSecure` *(bool)* — Requires HTTPS for cookies.
-  - `CookieSameSite` *(http.SameSite)* — Cookie SameSite policy (default: `http.SameSiteLaxMode`).
-  - `RefreshTokenPath` *(string)* — Path restriction for `refresh_token` cookie (default: `"/"`).
-- **Exported Errors**:
-  - `jwt.ErrMissingAccessToken`
-  - `jwt.ErrInvalidAccessToken`
-  - `jwt.ErrMissingRefreshToken`
-  - `jwt.ErrInvalidRefreshToken`
-
----
-
-### 3. `logger` — Context-Aware Structured Logging & Tracing
-
-The `logger` package wraps standard library `log/slog` to provide structured logging with request ID tracing, user ID tracking, automatic sensitive data redaction (`password`, `token`, `secret`, etc.), and a Gin access-logging middleware.
-
-#### Features
-
-- **Context Metadata Extraction**: Log functions automatically pull `request_id` and `user_id` from `context.Context`.
-- **Sensitive Key Redaction**: `maskingHandler` masks sensitive field keys (`password`, `token`, `secret`, `authorization`, `cookie`, `access_token`, `refresh_token`) into `"[REDACTED]"`.
-- **Gin Access Middleware**: Automatically logs HTTP request method, path, IP, status code, latency (ms), and errors.
-
-#### Code Example
-
-```go
-package main
-
-import (
-	"context"
-	"os"
-
-	"github.com/abdelrahmanAhmed1x/core/logger"
-	"github.com/gin-gonic/gin"
-)
-
-func main() {
-	// 1. Initialize Logger
-	log := logger.New(logger.Config{
-		Level:          "debug",   // "debug", "info", "warn", "error" (default: "info")
-		Format:         "json",    // "json" or "text" (default: "text")
-		Output:         os.Stdout, // Default: os.Stdout
-		MaskSensitives: true,      // Automatically redacts sensitive fields
-	})
-
-	r := gin.New()
-
-	// 2. Attach Gin access logging & tracing middleware
-	r.Use(logger.Middleware(log))
-
-	r.POST("/login", func(c *gin.Context) {
-		ctx := c.Request.Context()
-
-		// Context log output will automatically contain request_id from logger.Middleware
-		log.Info(ctx, "User attempt login", "username", "john_doe")
-
-		// Sensitive attributes are automatically masked in output as "[REDACTED]"
-		log.Debug(ctx, "Authenticating user credentials",
-			"username", "john_doe",
-			"password", "my_super_secret_password", // -> "[REDACTED]"
-			"token", "bearer-token-12345",          // -> "[REDACTED]"
-		)
-
-		// Create child logger with contextual attributes
-		userLogger := log.With("module", "user_service")
-		userLogger.Info(ctx, "User profile updated", "user_id", "usr_100")
-
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
-	// Manual context creation helper example:
-	ctx := context.Background()
-	ctx = logger.ContextWithRequestID(ctx, "req-99999")
-	log.Info(ctx, "Background task started") // Includes request_id="req-99999"
-
-	r.Run(":8080")
-}
-```
-
-#### API Reference
-
-- **Constructor**:
-  - `logger.New(cfg logger.Config) logger.Logger` — Constructs a `Logger` instance.
-- **`Logger` Interface**:
-  - `Debug(ctx context.Context, msg string, args ...any)`
-  - `Info(ctx context.Context, msg string, args ...any)`
-  - `Warn(ctx context.Context, msg string, args ...any)`
-  - `Error(ctx context.Context, msg string, args ...any)`
-  - `With(args ...any) Logger` — Returns child logger with pre-attached key-value attributes.
-  - `Slog() *slog.Logger` — Exposes underlying standard `*slog.Logger`.
-- **Gin Middleware & Helpers**:
-  - `logger.Middleware(l logger.Logger) gin.HandlerFunc` — Gin middleware generating/propagating `X-Request-ID` and logging request metrics.
-  - `logger.ContextWithRequestID(ctx context.Context, reqID string) context.Context` — Injects request ID into context.
-- **Context Keys & Constants**:
-  - `logger.RequestIDKey` (`"request_id"`)
-  - `logger.UserIDKey` (`"user_id"`)
-  - `logger.HeaderXRequestID` (`"X-Request-ID"`)
-
----
-
-### 4. `middleware` — Production HTTP Security & Control Middlewares
-
-The `middleware` package provides essential production middlewares for CORS configuration, body size limits, HTTP security headers, request ID injection, and context timeouts.
-
-#### Code Example
-
-```go
-package main
-
-import (
-	"time"
-
-	"github.com/abdelrahmanAhmed1x/core/middleware"
-	"github.com/gin-gonic/gin"
-)
-
-func main() {
-	r := gin.New()
-	r.Use(gin.Recovery())
-
-	// 1. Request ID Middleware (Injects/propagates X-Request-ID header & context key)
-	r.Use(middleware.RequestID())
-
-	// 2. Security Headers Middleware (Injected headers: X-Content-Type-Options, X-Frame-Options, Referrer-Policy, X-Permitted-Cross-Domain-Policies)
-	r.Use(middleware.SecurityHeaders())
-
-	// 3. Max Body Size Middleware (Restricts request body to 10 MB to prevent memory exhaustion DoS)
-	r.Use(middleware.MaxBodySize(10 * 1024 * 1024))
-
-	// 4. Request Timeout Middleware (Applies 30-second deadline to c.Request.Context())
-	r.Use(middleware.Timeout(30 * time.Second))
-
-	// 5. Configurable CORS Middleware
-	r.Use(middleware.CORS(middleware.CORSConfig{
-		AllowedOrigins:   []string{"https://example.com", "http://localhost:3000"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
-		ExposedHeaders:   []string{"X-Request-ID"},
-		AllowCredentials: true,
-		MaxAge:           86400, // 24 hours preflight cache
-	}))
-
-	r.GET("/ping", func(c *gin.Context) {
-		c.String(200, "pong")
-	})
-
-	r.Run(":8080")
-}
-```
-
-#### API Reference
-
-- `middleware.CORS(cfg CORSConfig) gin.HandlerFunc` — Sets CORS response headers and handles HTTP `OPTIONS` preflight requests. Panics if `AllowedOrigins` is empty or wildcard `*` is used with `AllowCredentials: true`.
-- `middleware.MaxBodySize(bytes int64) gin.HandlerFunc` — Wraps `c.Request.Body` with `http.MaxBytesReader`. Panics if `bytes <= 0`.
-- `middleware.RequestID() gin.HandlerFunc` — Reads `X-Request-ID` header or generates a random 16-byte hex ID, setting it on response headers and context.
-- `middleware.SecurityHeaders() gin.HandlerFunc` — Sets OWASP recommended defense-in-depth HTTP response headers.
-- `middleware.Timeout(timeout time.Duration) gin.HandlerFunc` — Attaches a deadline context to `c.Request.Context()`. Panics if `timeout <= 0`.
-
----
-
-### 5. `pagination` — Generic Request & Response Pagination
-
-The `pagination` package handles binding pagination query parameters (`page`, `limit`), computing SQL offsets (`Offset()`), and returning structured JSON pagination metadata.
-
-#### Code Example
-
-```go
-package main
-
-import (
-	"github.com/abdelrahmanAhmed1x/core/httpx"
-	"github.com/abdelrahmanAhmed1x/core/pagination"
-	"github.com/gin-gonic/gin"
-)
-
 type Product struct {
-	ID    int     `json:"id"`
-	Name  string  `json:"name"`
-	Price float64 `json:"price"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
+```
+<!-- /example -->
 
-func listProductsHandler(c *gin.Context) {
-	// 1. Bind pagination query (?page=2&limit=10). Defaults to page=1, limit=10 if omitted.
-	q, ok := httpx.BindQuery[pagination.Query](c)
+<!-- example:setup -->
+```go
+ctx := context.Background() // In a handler, use c.Request.Context().
+r := gin.New()
+r.Use(gin.Recovery())
+```
+<!-- /example -->
+
+Redis-backed examples use a caller-owned `rdb` (`github.com/redis/go-redis/v9`):
+
+<!-- example:redis-client -->
+```go
+rdb := redis.NewClient(&redis.Options{
+	Addr: "127.0.0.1:6379", ContextTimeoutEnabled: true,
+	DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second,
+})
+defer rdb.Close() // In main: the application owns this shared client.
+```
+<!-- /example -->
+
+Use a local Redis/DragonflyDB server at `127.0.0.1:6379` for those examples.
+`signingKey` and `refreshKey` come from your secret manager (random, at least 32 bytes;
+distinct for stateless pairs). `verifiedUser` means your login flow has **already
+verified identity**. Never issue credentials from unchecked client input.
+Replace the example user ID `user-42` with that verified user’s ID.
+
+**Cache a product.** `loadProduct` is your `func(context.Context) (Product, error)`
+that fetches product 42 from the database:
+
+<!-- example:quick-cache -->
+```go
+local := memory.New[Product](memory.Config{Entries: 1000}, nil)
+products := cache.NewLoader[Product](local, cache.LoaderConfig{Coalesce: true})
+product, err := products.GetOrLoad(ctx, "product:42", time.Minute, loadProduct)
+if err != nil {
+	return err
+}
+```
+<!-- /example -->
+
+**Create a JWT manager** (no Redis needed):
+
+<!-- example:quick-jwt -->
+```go
+auth := single.New[User](single.Config{
+	SecretKey: signingKey, Issuer: "shop", Audience: "api", TTL: 15 * time.Minute,
+})
+```
+<!-- /example -->
+
+**Add a shared request quota** to the Gin router:
+
+<!-- example:ratelimiter -->
+```go
+limiter := ratelimiter.New(rdb)
+r.Use(limiter.Middleware(ratelimiter.Limit{
+	Rate: 100, Burst: 20, Period: time.Minute, FailureMode: ratelimiter.FailClosed,
+}, ratelimiter.ByIP))
+```
+<!-- /example -->
+
+See [stateful auth](#auth-stateful) for revocable sessions. Each package section
+below starts with its constructor and a focused usage example.
+Runnable programs: [auth](examples/auth/main.go), [cache](examples/cache/main.go),
+[HTTP service with shutdown](examples/server/main.go). Run `go run ./examples/cache`
+without Redis. All marked snippets are [compile checked](examples/handbook/handbook_test.go).
+
+## Authentication
+
+| Strategy | Credential | Store | Logout/revocation | Refresh |
+|---|---|---|---|---|
+| Stateful | Opaque session | Redis/DragonflyDB | Yes | Idle renewal |
+| Hybrid | JWT access, opaque refresh | Redis/DragonflyDB | Refresh state only | Yes |
+| Stateless | Two JWTs | None | No individual revocation | Yes, reusable |
+| Single | One JWT | None | No individual revocation | None |
+
+All four managers protect Gin routes and expose the authenticated user the same way:
+
+<!-- example:auth-route -->
+```go
+r.GET("/me", auth.Middleware(), func(c *gin.Context) {
+	user, ok := auth.Payload(c)
 	if !ok {
+		c.AbortWithStatus(401)
 		return
 	}
-
-	// Calculate database query offset: (Page - 1) * Limit
-	dbOffset := q.Offset()
-	_ = dbOffset // Use in SQL: SELECT * FROM products LIMIT q.Limit OFFSET dbOffset
-
-	// Mock DB result
-	products := []Product{
-		{ID: 11, Name: "Mechanical Keyboard", Price: 99.99},
-		{ID: 12, Name: "Wireless Mouse", Price: 49.99},
-	}
-	totalProductsCount := 45
-
-	// 2. Build generic pagination result
-	result := pagination.NewResult(products, totalProductsCount, q)
-
-	// 3. Send standardized OK response envelope
-	httpx.OK(c, result)
-}
-
-func main() {
-	r := gin.Default()
-	r.GET("/products", listProductsHandler)
-	r.Run(":8080")
-}
+	c.JSON(200, user)
+})
 ```
+<!-- /example -->
 
-#### JSON Output Example (`GET /products?page=2&limit=10`)
+Clients can send `Authorization: Bearer <credential>`. Browsers can use secure cookies;
+set exact allowed origins for cookie-authenticated writes. Use `c.Request.Context()`
+in handlers. Application permissions are separate from login.
 
-```json
-{
-  "success": true,
-  "data": {
-    "items": [
-      { "id": 11, "name": "Mechanical Keyboard", "price": 99.99 },
-      { "id": 12, "name": "Wireless Mouse", "price": 49.99 }
-    ],
-    "meta": {
-      "page": 2,
-      "limit": 10,
-      "total_items": 45,
-      "total_pages": 5
-    }
-  }
-}
-```
+<a id="auth-stateful"></a>
 
-#### API Reference
+### `auth/stateful`
 
-- **`pagination.Query` Struct**:
-  - `Page int` — `form:"page,default=1" binding:"omitempty,min=1"`
-  - `Limit int` — `form:"limit,default=10" binding:"omitempty,min=1,max=100"`
-  - `EnsureDefaults()` — Sets `Page = 1` if `<= 0` and `Limit = 10` if `<= 0`.
-  - `Offset() int` — Returns calculated DB offset `(Page - 1) * Limit`.
-- **`pagination.Meta` Struct**:
-  - `Page int`, `Limit int`, `TotalItems int`, `TotalPages int`
-- **`pagination.Result[T]` Struct**:
-  - `Items []T`, `Meta pagination.Meta`
-- **Constructor**:
-  - `pagination.NewResult[T](items []T, totalItems int, q Query) Result[T]` — Calculates total pages (`ceil(totalItems / limit)`) and returns `Result[T]`. Ensures empty slice `[]T` instead of `null` in JSON when items is nil.
+**What it does:** Opaque login sessions stored in Redis or DragonflyDB. Sessions support logout and revocation. **When to use it:** Web/mobile applications where users need device logout or logout-all.
 
----
+**How to use it:**
 
-### 6. `ratelimiter` — Redis-Backed Distributed Rate Limiting
-
-The `ratelimiter` package implements sliding-window rate limiting using Redis (`github.com/go-redis/redis_rate/v10`). It allows custom key generation (IP address, user ID, API key) and supports configurable failure modes (`FailOpen` or `FailClosed`).
-
-#### Failure Modes
-
-- **`ratelimiter.FailOpen`**: If Redis is unreachable, the rate limiter allows the request to pass through (prioritizes availability).
-- **`ratelimiter.FailClosed`**: If Redis is unreachable, the rate limiter aborts with `503 Service Unavailable` (prioritizes protection).
-
-#### Code Example
-
+<!-- example:stateful -->
 ```go
-package main
-
-import (
-	"time"
-
-	"github.com/abdelrahmanAhmed1x/core/auth/jwt"
-	"github.com/abdelrahmanAhmed1x/core/ratelimiter"
-	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
-)
-
-type SessionPayload struct {
-	UserID string `json:"user_id"`
+auth := stateful.New[User](rdb, stateful.Config{
+	Namespace: "shop:sessions", AbsoluteTTL: 24 * time.Hour,
+})
+token, err := auth.Create(ctx, "user-42", verifiedUser)
+if err != nil {
+	return err
 }
-
-func main() {
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	limiter := ratelimiter.New(rdb)
-
-	r := gin.Default()
-
-	// 1. IP-based rate limiting (100 requests per minute per IP, FailOpen mode)
-	ipLimitMiddleware := limiter.Middleware(
-		ratelimiter.Limit{
-			Rate:        100,
-			Burst:       100,
-			Period:      time.Minute,
-			FailureMode: ratelimiter.FailOpen,
-		},
-		ratelimiter.ByIP, // Builtin KeyFunc returning c.ClientIP()
-	)
-
-	// 2. Custom User-ID or Header rate limiting
-	userLimitMiddleware := limiter.Middleware(
-		ratelimiter.Limit{
-			Rate:        10,
-			Burst:       20,
-			Period:      time.Minute,
-			FailureMode: ratelimiter.FailClosed,
-		},
-		func(c *gin.Context) string {
-			// Extract custom key, e.g. API key or authenticated User ID
-			if apiKey := c.GetHeader("X-API-Key"); apiKey != "" {
-				return "rate:api_key:" + apiKey
-			}
-			return "rate:ip:" + c.ClientIP()
-		},
-	)
-
-	r.GET("/public-api", ipLimitMiddleware, func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
-	r.POST("/sensitive-op", userLimitMiddleware, func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "processed"})
-	})
-
-	r.Run(":8080")
+user, err := auth.Verify(ctx, token)
+if err != nil {
+	return err
 }
 ```
+<!-- /example -->
 
-#### API Reference
+**Available API:**
 
-- **Constructor**:
-  - `ratelimiter.New(client redis.UniversalClient) *limiter` — Instantiates rate limiter.
-- **Methods**:
-  - `Middleware(limit Limit, keyfn KeyFunc) gin.HandlerFunc` — Returns Gin middleware enforcing rate limits. Automatically calls `httpx.AbortTooManyRequests(c)` when limit is exceeded.
-- **`Limit` Struct**:
-  - `Rate int` — Number of allowed events per period.
-  - `Burst int` — Maximum burst size.
-  - `Period time.Duration` — Time window duration (e.g. `time.Minute`).
-  - `FailureMode FailureMode` — `ratelimiter.FailOpen` or `ratelimiter.FailClosed`.
-- **Key Extractors & Enums**:
-  - `ratelimiter.ByIP` — Built-in `KeyFunc` returning `c.ClientIP()`.
-  - `ratelimiter.FailOpen` (`0`) — Allows requests on Redis failure.
-  - `ratelimiter.FailClosed` (`1`) — Aborts with HTTP 503 on Redis failure.
+| API | Purpose |
+|---|---|
+| `New[T](client, Config)` | Create a session manager. |
+| `Create / Verify` | Issue a session credential / look it up. |
+| `Renew / Revoke / RevokeAll` | Extend idle lifetime / revoke one session / revoke a user’s sessions. |
+| `Login / Logout` | Set or clear browser credentials and update stored sessions. |
+| `Middleware / OptionalMiddleware / Payload` | Require login / allow guests / read the typed user. |
 
----
+**Configuration:** `Namespace` and `AbsoluteTTL` are required. `IdleTTL=0` disables idle expiry; `OperationTimeout` defaults to `3s`. `Transport` controls cookies. [All options](docs/configuration.md#auth-stateful).
 
-## Complete Full-Server Example
+**Important notes:** Protected requests fail when Redis is unavailable. Renewal never extends the original maximum session age. For browser writes, set `Transport.AllowedOrigins`; send bearer credentials from native clients. [More](docs/authentication.md#stateful-sessions).
 
-Below is a complete, production-ready server demonstrating how all packages in `core` integrate together:
+<a id="auth-jwt"></a>
 
+### `auth/jwt`
+
+**What it does:** JWT access tokens with opaque refresh credentials stored in Redis/DragonflyDB. **When to use it:** Applications that need JWT access tokens and persistent login.
+
+**How to use it:**
+
+<!-- example:hybrid -->
 ```go
-package main
-
-import (
-	"net/http"
-	"time"
-
-	"github.com/abdelrahmanAhmed1x/core/auth/jwt"
-	"github.com/abdelrahmanAhmed1x/core/httpx"
-	"github.com/abdelrahmanAhmed1x/core/logger"
-	"github.com/abdelrahmanAhmed1x/core/middleware"
-	"github.com/abdelrahmanAhmed1x/core/pagination"
-	"github.com/abdelrahmanAhmed1x/core/ratelimiter"
-	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
-)
-
-// Data models
-type UserAccount struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+auth := hybrid.New[User](rdb, hybrid.Config{
+	SecretKey: signingKey, Issuer: "shop", CookieSecure: true,
+	AllowedOrigins: []string{"https://app.example.com"},
+})
+if err := auth.Login(c, verifiedUser); err != nil {
+	return err
 }
+// In separate handlers: auth.Refresh(c) and auth.Logout(c), both return error.
+```
+<!-- /example -->
 
-type CreateArticleRequest struct {
-	Title   string `json:"title" binding:"required,min=3"`
-	Content string `json:"content" binding:"required"`
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New[T](client, Config)` | Create the hybrid Authenticator[T]. |
+| `Login / Refresh / Logout` | Set credential cookies / refresh the pair / revoke refresh state and clear cookies. |
+| `Middleware / OptionalMiddleware` | Verify access credentials / optionally authenticate. |
+| `Payload / MustPayload` | Read the typed user; MustPayload panics if missing. |
+
+**Configuration:** `SecretKey` and `Issuer` are required. `AccessTTL=15m`, `RefreshTTL=7d`; `Audience` is optional. Set `CookieSecure:true` and trusted `AllowedOrigins`. [All options](docs/configuration.md#auth-jwt).
+
+**Important notes:** Logout revokes refresh state; existing access JWTs still work until expiry. This package’s operations use Gin contexts. Its optional middleware treats invalid single credentials as guests. [More](docs/authentication.md#hybrid-jwt).
+
+<a id="auth-stateless"></a>
+
+### `auth/stateless`
+
+**What it does:** Signed access and refresh JWTs without a session store. **When to use it:** Services that accept reusable refresh credentials and no individual server-side revocation.
+
+**How to use it:**
+
+<!-- example:stateless -->
+```go
+auth := stateless.New[User](stateless.Config{
+	Issuer: "shop", AccessAudience: "api", RefreshAudience: "refresh",
+	AccessKey: signingKey, RefreshKey: refreshKey,
+	AccessTTL: 15 * time.Minute, RefreshTTL: 24 * time.Hour,
+})
+pair, err := auth.Issue(verifiedUser)
+if err != nil {
+	return err
 }
-
-type Article struct {
-	ID        int       `json:"id"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func main() {
-	// 1. Infrastructure Setup: Redis & Logger
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-
-	log := logger.New(logger.Config{
-		Level:          "info",
-		Format:         "json",
-		MaskSensitives: true,
-	})
-
-	// 2. Authentication Setup
-	auth := jwt.New[UserAccount](rdb, jwt.Config{
-		SecretKey:        "production-super-secret-key-32bytes!",
-		Issuer:           "core-demo-api",
-		AccessTTL:        15 * time.Minute,
-		RefreshTTL:       7 * 24 * time.Hour,
-		CookieSecure:     false,
-		CookieSameSite:   http.SameSiteLaxMode,
-		RefreshTokenPath: "/auth",
-	})
-
-	// 3. Rate Limiter Setup
-	limiter := ratelimiter.New(rdb)
-
-	// 4. Gin Engine & Global Middlewares
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.Use(logger.Middleware(log))
-	r.Use(middleware.RequestID())
-	r.Use(middleware.SecurityHeaders())
-	r.Use(middleware.MaxBodySize(5 * 1024 * 1024)) // 5 MB
-	r.Use(middleware.Timeout(10 * time.Second))
-	r.Use(middleware.CORS(middleware.CORSConfig{
-		AllowedOrigins:   []string{"http://localhost:3000"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"},
-		AllowCredentials: true,
-	}))
-
-	// Global IP Rate Limiter: 60 req/min
-	r.Use(limiter.Middleware(
-		ratelimiter.Limit{Rate: 60, Burst: 60, Period: time.Minute, FailureMode: ratelimiter.FailOpen},
-		ratelimiter.ByIP,
-	))
-
-	// Auth Endpoints
-	authGroup := r.Group("/auth")
-	{
-		authGroup.POST("/login", func(c *gin.Context) {
-			user := UserAccount{UserID: "usr_101", Email: "admin@example.com", Role: "editor"}
-			if err := auth.Login(c, user); err != nil {
-				httpx.AbortInternal(c, err)
-				return
-			}
-			httpx.OK(c, gin.H{"message": "Logged in successfully"})
-		})
-
-		authGroup.POST("/refresh", func(c *gin.Context) {
-			if err := auth.Refresh(c); err != nil {
-				httpx.AbortUnauthorized(c, "Invalid refresh session")
-				return
-			}
-			httpx.OK(c, gin.H{"message": "Token pair refreshed"})
-		})
-
-		authGroup.POST("/logout", func(c *gin.Context) {
-			_ = auth.Logout(c)
-			httpx.OK(c, gin.H{"message": "Logged out successfully"})
-		})
-	}
-
-	// Protected API Routes
-	api := r.Group("/api", auth.Middleware())
-	{
-		api.GET("/me", func(c *gin.Context) {
-			user := auth.MustPayload(c)
-			httpx.OK(c, user)
-		})
-
-		api.POST("/articles", func(c *gin.Context) {
-			req, ok := httpx.BindJSON[CreateArticleRequest](c)
-			if !ok {
-				return
-			}
-
-			article := Article{
-				ID:        1,
-				Title:     req.Title,
-				Content:   req.Content,
-				CreatedAt: time.Now(),
-			}
-
-			log.Info(c.Request.Context(), "Created article", "article_id", article.ID)
-			httpx.Created(c, article)
-		})
-
-		api.GET("/articles", func(c *gin.Context) {
-			q, ok := httpx.BindQuery[pagination.Query](c)
-			if !ok {
-				return
-			}
-
-			articles := []Article{
-				{ID: 1, Title: "First Article", Content: "Hello World", CreatedAt: time.Now()},
-				{ID: 2, Title: "Second Article", Content: "Go Core Package", CreatedAt: time.Now()},
-			}
-			totalCount := 25
-
-			result := pagination.NewResult(articles, totalCount, q)
-			httpx.OK(c, result)
-		})
-	}
-
-	log.Info(nil, "Server starting on port 8080...")
-	r.Run(":8080")
+user, err := auth.VerifyAccess(pair.Access)
+if err != nil {
+	return err
 }
 ```
+<!-- /example -->
 
----
+**Available API:**
 
-## License
+| API | Purpose |
+|---|---|
+| `New[T](Config)` | Create the JWT pair manager. |
+| `Issue` | Return Pair{Access, Refresh} after identity verification. |
+| `VerifyAccess / VerifyRefresh` | Check the intended credential and return its payload. |
+| `Refresh` | Issue another pair from a valid refresh JWT. |
+| `Middleware / OptionalMiddleware / Payload` | Protect access routes / allow guests / read the user. |
 
-MIT License. See [LICENSE](LICENSE) for details.
+**Configuration:** `Issuer`, distinct `AccessAudience`/`RefreshAudience`, distinct `AccessKey`/`RefreshKey`, and both TTLs are required. `Leeway=0`; `Transport` controls access cookies. [All options](docs/configuration.md#auth-stateless).
+
+**Important notes:** **Neither JWT can be individually revoked before expiry. Refreshing does not invalidate the old pair.** Delete client credentials to sign out locally; there is no server-side Logout. [More](docs/authentication.md#stateless-pair).
+
+<a id="auth-single"></a>
+
+### `auth/single`
+
+**What it does:** One expiring JWT, with no refresh token or datastore. **When to use it:** Small APIs and short-lived credentials where server-side revocation is unnecessary.
+
+**How to use it:**
+
+<!-- example:single -->
+```go
+auth := single.New[User](single.Config{
+	SecretKey: signingKey, Issuer: "shop", Audience: "api", TTL: 15 * time.Minute,
+})
+token, err := auth.Issue(verifiedUser)
+if err != nil {
+	return err
+}
+user, err := auth.Verify(token)
+if err != nil {
+	return err
+}
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New[T](Config)` | Create the JWT manager. |
+| `Issue / Verify` | Sign a credential / check it and return the payload. |
+| `Middleware / OptionalMiddleware / Payload` | Require login / allow guests / read the typed user. |
+
+**Configuration:** `SecretKey`, `Issuer`, `Audience`, and `TTL` are required. `Leeway=0`; `Transport` controls cookies. [All options](docs/configuration.md#auth-single).
+
+**Important notes:** **A copied JWT remains valid until expiry**, even after local cookie deletion. There is no refresh or server-side Logout. [More](docs/authentication.md#single-jwt).
+
+<a id="auth-transport"></a>
+
+### `auth/transport`
+
+**What it does:** Cookie/bearer extraction and secure cookie delivery shared by the auth packages. **When to use it:** Browser cookies, native bearer clients, or a custom authentication adapter.
+
+**How to use it:**
+
+<!-- example:transport -->
+```go
+cookies := transport.Normalize(transport.Config{
+	CookieName: "__Host-access", AllowedOrigins: []string{"https://app.example.com"},
+})
+transport.SetCookie(c.Writer, cookies, token, 15*time.Minute)
+// To delete the client's cookie: transport.SetCookie(c.Writer, cookies, "", 0).
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `Normalize / ValidateOrigin` | Apply defaults and check cookie/origin configuration. |
+| `Extract / SetCookie` | Read a credential / set or delete its cookie. |
+| `Middleware[T]` | Adapt a context-based verifier to Gin. |
+| `Payload[T] / StorePayload` | Read a trusted payload / populate it from a verified identity. |
+
+**Configuration:** Defaults: `CookieName=__Host-session`, `Path=/`, Secure, HttpOnly, SameSite=Lax. Set exact `AllowedOrigins` for cookie-authenticated writes. [All options](docs/configuration.md#auth-transport).
+
+**Important notes:** Conflicting cookie/bearer credentials are rejected. Deleting a cookie does not revoke server state. For local HTTP use an unprefixed name plus `InsecureDevelopment:true`. [More](docs/security.md#cookies-and-bearer-credentials).
+
+## Caching
+
+Memory keeps values in one process. Redis/DragonflyDB shares them across instances.
+Tiered caching checks memory first, then the shared store. Use the same Get/Set/Delete
+methods on any backend; a missing value is `cache.ErrMiss`, not a server failure.
+
+<a id="cache"></a>
+
+### `cache`
+
+**What it does:** Loads data from a cache or your source function when it is missing. **When to use it:** Read-heavy product/detail endpoints that should avoid repeated database queries.
+
+**How to use it:**
+
+<!-- example:loader -->
+```go
+products := cache.NewLoader[Product](local, cache.LoaderConfig{Coalesce: true})
+product, err := products.GetOrLoad(ctx, "product:42", time.Minute, loadProduct)
+if err != nil {
+	return err
+}
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `NewLoader[T](backend, LoaderConfig)` | Wrap any cache backend. |
+| `GetOrLoad` | Check cache, load a missing value, save it and return it. |
+| `Store / Invalidate` | Write an updated value / remove a value through this loader. |
+| `Cache[T] / Codec[T] / JSON[T]` | Backend contract / custom encoding / default JSON encoding. |
+
+**Configuration:** `Coalesce=false` by default; set true to share concurrent loads. `Timeout=5s`, `MaxConcurrent=128`, `Jitter=0`, `Strict=false`. Negative caching is off. [All options](docs/configuration.md#cache).
+
+**Important notes:** With `Coalesce:true`, 100 requests for one missing product can share one database call within that process. By default cache failures fall back to the source; `Strict:true` returns them. [More](docs/caching.md#loading-missing-values).
+
+<a id="cache-memory"></a>
+
+### `cache/memory`
+
+**What it does:** Stores data inside this Go process with a bounded entry count. **When to use it:** One-server applications or a local cache of frequently read data.
+
+**How to use it:**
+
+<!-- example:memory -->
+```go
+local := memory.New[Product](memory.Config{Entries: 1000}, nil) // nil selects JSON.
+if err := local.Set(ctx, "product:42", product, time.Minute); err != nil {
+	return err
+}
+entry, err := local.Get(ctx, "product:42")
+if err != nil {
+	return err
+}
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New[T](Config, codec)` | Create the cache; nil codec selects JSON. |
+| `Get / Set / Delete` | Read Entry[T]{Value, ExpiresAt} / write with TTL / remove. |
+| `Purge` | Remove all entries from this cache instance. |
+
+**Configuration:** `Entries` is required. `MaxBytes=1MiB` limits encoded values; `Namespace` is optional; `Observer=nil` disables metrics. [All options](docs/configuration.md#cache-memory).
+
+**Important notes:** `Get` returns `cache.ErrMiss` when absent or expired. TTL must be positive. Instances do not share contents; there are no workers or Close method. [More](docs/caching.md#memory-cache).
+
+<a id="cache-redis"></a>
+
+### `cache/redis`
+
+**What it does:** Shares cached values through Redis or DragonflyDB. **When to use it:** Multiple Go instances that need the same cached data without a local copy.
+
+**How to use it:**
+
+<!-- example:redis-cache -->
+```go
+shared := rediscache.New[Product](rdb, rediscache.Config{
+	Namespace: "shop:products:v1", Timeout: time.Second,
+}, nil)
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New[T](client, Config, codec)` | Use an existing redis.UniversalClient; nil codec selects JSON. |
+| `Get / Set / Delete` | Use the same typed cache methods as memory. |
+
+**Configuration:** `Namespace` is required. `Timeout=2s`, `MaxBytes=1MiB`, `Observer=nil`. Keys are stored under your namespace. [All options](docs/configuration.md#cache-redis).
+
+**Important notes:** A miss is `cache.ErrMiss`; a backend error remains an error. TTL must be at least `1ms`. The application owns and closes the client. [More](docs/caching.md#redis-and-dragonflydb).
+
+<a id="cache-tiered"></a>
+
+### `cache/tiered`
+
+**What it does:** Checks memory first, then Redis/DragonflyDB. **When to use it:** Several instances serving hot data that can tolerate briefly outdated local copies.
+
+**How to use it:**
+
+<!-- example:tiered -->
+```go
+products := tiered.New[Product](local, shared, 2*time.Second, nil)
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New[T](l1, l2, maxL1TTL, observer)` | Combine two existing caches; observer may be nil. |
+| `Get / Set / Delete` | Read through both levels / write / remove from this instance’s levels. |
+
+**Configuration:** Supply a positive `maxL1TTL`, such as `2*time.Second`. Configure capacity and connection settings on the underlying caches. [All options](docs/configuration.md#cache-tiered).
+
+**Important notes:** **Other instances may return an older L1 copy until its TTL expires.** Choose Redis-only caching when you want to avoid this extra local staleness. [More](docs/caching.md#tiered-cache).
+
+## HTTP and service utilities
+
+<a id="authorization"></a>
+
+### `authorization`
+
+**What it does:** Checks roles, permissions and your own policy functions against a trusted user. **When to use it:** Admin routes, permission checks, or application resource policies.
+
+**How to use it:**
+
+<!-- example:authorization -->
+```go
+access := authorization.New(func(c *gin.Context) (authorization.Principal, error) {
+	user, ok := auth.Payload(c)
+	if !ok {
+		return authorization.Principal{}, authorization.ErrUnauthenticated
+	}
+	return authorization.Principal{Roles: []string{user.Role}}, nil
+})
+r.GET("/admin", auth.Middleware(), access.RequireRole("admin"), func(c *gin.Context) {
+	c.Status(204)
+})
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(Resolver)` | Resolve trusted roles/permissions, optionally from your database. |
+| `RequireRole / RequireAnyRole / RequirePermission` | Allow matching roles or permissions. |
+| `Require(Policy)` | Run your own context-aware predicate. |
+
+**Configuration:** No config struct. A resolver returns `Principal{Roles, Permissions}` or an error. [All options](docs/configuration.md#authorization).
+
+**Important notes:** Missing users should return `ErrUnauthenticated` (401); denied access is 403. Empty requirements deny. Token roles may be stale: load fresh permissions when needed. [More](docs/security.md#authorization).
+
+<a id="httpx"></a>
+
+### `httpx`
+
+**What it does:** Typed Gin binding and consistent success/error JSON responses. **When to use it:** Handlers that should share request validation and response shapes.
+
+**How to use it:**
+
+<!-- example:httpx -->
+```go
+request, ok := httpx.BindJSON[struct {
+	Name string `json:"name" binding:"required"`
+}](c)
+if !ok {
+	return
+} // A 400 response has already been sent.
+httpx.Created(c, Product{ID: 42, Name: request.Name})
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `BindJSON[T] / BindURI[T] / BindQuery[T]` | Bind and validate input; return (value, ok). |
+| `OK / Created / NoContent` | Send 200 / 201 / 204 responses. |
+| `AbortBadRequest / AbortUnauthorized / AbortForbidden / AbortInternal` | Stop with safe HTTP errors; more Abort helpers are listed in the package README. |
+
+**Configuration:** No constructor or config. Use Gin `json`, `uri`, `form`, and `binding` struct tags. [All options](docs/configuration.md#httpx).
+
+**Important notes:** Return when binding reports false: the 400 response is already sent. Keep application-supplied error messages/details safe for clients. [More](docs/operations.md#http-responses).
+
+<a id="logger"></a>
+
+### `logger`
+
+**What it does:** Contextual structured logging backed by standard slog. **When to use it:** JSON service logs and request-correlated Gin access logs.
+
+**How to use it:**
+
+<!-- example:logger -->
+```go
+log := logger.New(logger.Config{Format: "json", MaskSensitives: true})
+r.Use(logger.Middleware(log))
+log.Info(ctx, "service started", "component", "api")
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(Config)` | Create a logger. |
+| `Debug / Info / Warn / Error / With` | Log with context and structured attributes / attach shared attributes. |
+| `Middleware / ContextWithRequestID / Slog` | Access logs / correlation context / standard slog integration. |
+
+**Configuration:** `Level=info`, `Format=text`, `Output=stdout`. Set `Format:"json"` and `MaskSensitives:true` to enable known-key redaction. [All options](docs/configuration.md#logger).
+
+**Important notes:** Redaction matches attribute keys; it does not scrub arbitrary messages or error strings. Never put credentials there. [More](docs/security.md#logging).
+
+<a id="middleware"></a>
+
+### `middleware`
+
+**What it does:** Gin helpers for request IDs, body limits, response headers, CORS and deadlines. **When to use it:** The shared HTTP boundary of your API.
+
+**How to use it:**
+
+<!-- example:middleware -->
+```go
+if err := r.SetTrustedProxies(nil); err != nil {
+	return err
+}
+r.Use(middleware.RequestID(), middleware.SecurityHeaders())
+r.Use(middleware.MaxBodySize(1<<20), middleware.Timeout(3*time.Second))
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `RequestID / SecurityHeaders` | Attach correlation IDs / common security headers. |
+| `MaxBodySize / Timeout` | Limit reads / set a request context deadline. |
+| `CORS(CORSConfig)` | Configure browser origins, methods, headers and credentials. |
+
+**Configuration:** Body bytes and timeout must be positive. CORS requires `AllowedOrigins`; common options are `AllowedMethods`, `AllowedHeaders`, `AllowCredentials`, and `MaxAge` (seconds). [All options](docs/configuration.md#middleware).
+
+**Important notes:** `Timeout` needs handlers to honor context; it does not force a 504. Wildcard CORS cannot allow credentials. Configure trusted proxies for your ingress. [More](docs/operations.md#http-middleware).
+
+<a id="pagination"></a>
+
+### `pagination`
+
+**What it does:** Binds page/limit inputs and builds result metadata. **When to use it:** List endpoints using offset/limit database queries.
+
+**How to use it:**
+
+<!-- example:pagination -->
+```go
+q, ok := httpx.BindQuery[pagination.Query](c)
+if !ok {
+	return
+}
+// Pass q.Offset() and q.Limit to your database query.
+items, total := []Product{{ID: 42, Name: "Keyboard"}}, 1
+httpx.OK(c, pagination.NewResult(items, total, q))
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `Query / EnsureDefaults / Offset` | Read page/limit / normalize direct inputs / compute an offset. |
+| `NewResult[T] / Result[T] / Meta` | Wrap items with page, limit, total items and total pages. |
+
+**Configuration:** Query defaults: `Page=1`, `Limit=10`, maximum limit `100`. No constructor config. [All options](docs/configuration.md#pagination).
+
+**Important notes:** Pass the real total count to NewResult. Empty results use an empty array. Very deep offsets can still be expensive for your database. [More](docs/operations.md#pagination).
+
+<a id="ratelimiter"></a>
+
+### `ratelimiter`
+
+**What it does:** Limits requests using a quota shared in Redis/DragonflyDB. **When to use it:** Protecting public endpoints or per-user API budgets.
+
+**How to use it:**
+
+<!-- example:ratelimiter -->
+```go
+limiter := ratelimiter.New(rdb)
+r.Use(limiter.Middleware(ratelimiter.Limit{
+	Rate: 100, Burst: 20, Period: time.Minute, FailureMode: ratelimiter.FailClosed,
+}, ratelimiter.ByIP))
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(client)` | Use your existing Redis client. |
+| `Middleware(Limit, KeyFunc)` | Apply a quota to routes. |
+| `ByIP / KeyFunc` | Use client IP or supply a trusted user/tenant key. |
+
+**Configuration:** `Rate`, `Burst`, and `Period` must be positive. Set `FailureMode:FailClosed` for 503 on store failure; the default `FailOpen` allows the request. [All options](docs/configuration.md#ratelimiter).
+
+**Important notes:** Exceeded quotas return 429 with Retry-After. Use trusted proxy settings for ByIP. The limiter never closes your client. [More](docs/operations.md#rate-limiting).
+
+<a id="health"></a>
+
+### `health`
+
+**What it does:** Separates process liveness from dependency readiness. **When to use it:** Load balancer or container health probes.
+
+**How to use it:**
+
+<!-- example:health -->
+```go
+checks := health.New(time.Second)
+checks.Register("redis", func(ctx context.Context) error { return rdb.Ping(ctx).Err() })
+r.GET("/live", checks.LiveHandler())
+r.GET("/ready", checks.ReadyHandler())
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(timeout) / Register(name, Check)` | Create a registry / register a context-aware dependency check. |
+| `Liveness / Readiness` | Standard HTTP handlers returning 200 or readiness 503. |
+| `LiveHandler / ReadyHandler / Ready(ctx)` | Gin handlers / named results for private diagnostics. |
+
+**Configuration:** Provide a positive readiness timeout. Each check returns an error when unhealthy. [All options](docs/configuration.md#health).
+
+**Important notes:** Liveness performs no external checks. Readiness hides infrastructure details. Checks must honor context. [More](docs/operations.md#health-checks).
+
+<a id="httpclient"></a>
+
+### `httpclient`
+
+**What it does:** Adds bounded retries and timeouts to standard outbound HTTP requests. **When to use it:** Calling an external API without repeating retry/backoff code.
+
+**How to use it:**
+
+<!-- example:httpclient -->
+```go
+client := httpclient.New(nil, httpclient.Config{Timeout: 3 * time.Second, Retries: 2})
+req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.com", nil)
+if err != nil {
+	return err
+}
+resp, err := client.Do(req)
+if err != nil {
+	return err
+}
+defer resp.Body.Close()
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(client, Config)` | Wrap a caller-owned client, or pass nil for a standard transport. |
+| `Do / CloseIdleConnections` | Send a request / explicitly close idle pooled connections. |
+
+**Configuration:** `Timeout=10s`, `Retries=0`, `BaseBackoff=100ms`, `MaxBackoff=5s`. Retry status/error callbacks and request-ID propagation are optional. [All options](docs/configuration.md#httpclient).
+
+**Important notes:** Always close the final response body. Non-idempotent requests are not retried unless explicitly enabled; bodies must be replayable. [More](docs/operations.md#outbound-http).
+
+<a id="observability"></a>
+
+### `observability`
+
+**What it does:** Optional OpenTelemetry metrics and Gin tracing, using your providers. **When to use it:** Measuring request/dependency duration and cache outcomes.
+
+**How to use it:**
+
+<!-- example:observability -->
+```go
+metrics, err := observability.New(provider.Meter("shop"))
+if err != nil {
+	return err
+}
+r.Use(metrics.Middleware(tracer, propagation.TraceContext{}))
+local := memory.New[Product](memory.Config{Entries: 1000, Observer: metrics}, nil)
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(metric.Meter)` | Create instruments; returns (*Instruments, error). |
+| `Middleware / Record` | Measure Gin requests / your own named dependency calls. |
+| `Observe` | Implement cache.Observer; pass Instruments as a cache/loader observer. |
+
+**Configuration:** No config struct. Supply your meter/tracer/propagator; omit middleware and leave observers nil to disable instrumentation. [All options](docs/configuration.md#observability).
+
+**Important notes:** Applications configure exporters. Never use tokens, user IDs, cache keys or raw URLs as metric labels. [More](docs/operations.md#observability).
+
+<a id="lifecycle"></a>
+
+### `lifecycle`
+
+**What it does:** Runs explicitly registered cleanup once, in reverse order. **When to use it:** Draining HTTP before closing shared clients during shutdown.
+
+**How to use it:**
+
+<!-- example:lifecycle -->
+```go
+shutdown := lifecycle.New(10 * time.Second)
+if err := shutdown.Register("redis", func(context.Context) error { return rdb.Close() }); err != nil {
+	return err
+}
+if err := shutdown.RegisterHTTP("http", server); err != nil {
+	return err
+}
+// Call after receiving a shutdown signal, using a fresh context:
+return shutdown.Shutdown(context.Background())
+```
+<!-- /example -->
+
+**Available API:**
+
+| API | Purpose |
+|---|---|
+| `New(timeout)` | Set the overall shutdown budget. |
+| `Register / RegisterHTTP` | Add named cleanup / standard HTTP graceful shutdown. |
+| `Shutdown(ctx)` | Run hooks and return joined cleanup errors; repeated calls do not rerun them. |
+
+**Configuration:** Provide a positive timeout. Register dependencies first and HTTP last. [All options](docs/configuration.md#lifecycle).
+
+**Important notes:** Use a fresh context after signal cancellation. Cleanup hooks must honor their deadline; Core cannot stop a stuck function. [More](docs/operations.md#shutdown).
+
+## Further reading
+
+- [Authentication](docs/authentication.md): browser/mobile recipes, refresh behavior, migration.
+- [Caching](docs/caching.md): backend choice, errors, concurrency and invalidation.
+- [Configuration](docs/configuration.md): complete field/default reference.
+- [Security](docs/security.md): credentials, cookies, authorization and logging boundaries.
+- [Operations](docs/operations.md): Redis, HTTP, health, telemetry and shutdown.
+- [Benchmarks](docs/benchmarks.md): recorded measurements and how to reproduce them.
+
+Run `go test ./...` for unit/documentation examples; see the operations guide for
+Redis/DragonflyDB integration tests. Core does not create or close your dependencies
+unless your application explicitly registers cleanup. Invalid static configuration
+usually panics at construction; normal operational failures return errors.

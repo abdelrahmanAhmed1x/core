@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/abdelrahmanAhmed1x/core/auth/internal/token"
+	"github.com/abdelrahmanAhmed1x/core/auth/transport"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/abdelrahmanAhmed1x/core/httpx"
@@ -22,7 +25,7 @@ import (
 // in the Gin context.
 func (m *manager[T]) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenString, err := c.Cookie(accessCookieName)
+		tokenString, err := m.extract(c, accessCookieName)
 		if err != nil {
 			httpx.AbortUnauthorized(c, "Authentication required")
 			return
@@ -35,6 +38,7 @@ func (m *manager[T]) Middleware() gin.HandlerFunc {
 		}
 
 		c.Set(payloadContextKey, payload)
+		transport.StorePayload(c, payload)
 
 		c.Next()
 	}
@@ -42,7 +46,11 @@ func (m *manager[T]) Middleware() gin.HandlerFunc {
 
 func (m *manager[T]) OptionalMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token, err := c.Cookie(accessCookieName)
+		token, err := m.extract(c, accessCookieName)
+		if errors.Is(err, transport.ErrConflict) || errors.Is(err, transport.ErrCSRF) {
+			httpx.AbortUnauthorized(c, "Invalid credential transport")
+			return
+		}
 		if err != nil {
 			c.Next()
 			return
@@ -51,10 +59,11 @@ func (m *manager[T]) OptionalMiddleware() gin.HandlerFunc {
 		payload, err := m.parseAccessToken(token)
 		if err != nil {
 			c.Next()
-			return 
+			return
 		}
 
 		c.Set(payloadContextKey, payload)
+		transport.StorePayload(c, payload)
 
 		c.Next()
 	}
@@ -62,6 +71,9 @@ func (m *manager[T]) OptionalMiddleware() gin.HandlerFunc {
 
 func (m *manager[T]) parseAccessToken(tokenString string) (T, error) {
 	var zero T
+	if len(tokenString) > 16384 {
+		return zero, ErrInvalidAccessToken
+	}
 
 	tokenClaims := &claims[T]{}
 
@@ -76,46 +88,17 @@ func (m *manager[T]) parseAccessToken(tokenString string) (T, error) {
 		}),
 		golangjwt.WithIssuer(m.cfg.Issuer),
 		golangjwt.WithExpirationRequired(),
+		golangjwt.WithIssuedAt(),
 	)
 	if err != nil {
 		return zero, fmt.Errorf("%w: %v", ErrInvalidAccessToken, err)
 	}
 
-	if !token.Valid {
+	if !token.Valid || (tokenClaims.Type != "" && tokenClaims.Type != "access") || (m.cfg.Audience != "" && !containsAudience(tokenClaims.Audience, m.cfg.Audience)) {
 		return zero, ErrInvalidAccessToken
 	}
 
 	return tokenClaims.Payload, nil
-}
-
-func createAccessToken[T any](
-	payload T,
-	ttl time.Duration,
-	issuer string,
-	secret []byte,
-) (string, error) {
-	now := time.Now()
-
-	tokenClaims := claims[T]{
-		Payload: payload,
-		RegisteredClaims: golangjwt.RegisteredClaims{
-			Issuer:    issuer,
-			IssuedAt:  golangjwt.NewNumericDate(now),
-			ExpiresAt: golangjwt.NewNumericDate(now.Add(ttl)),
-		},
-	}
-
-	token := golangjwt.NewWithClaims(
-		golangjwt.SigningMethodHS256,
-		tokenClaims,
-	)
-
-	signed, err := token.SignedString(secret)
-	if err != nil {
-		return "", fmt.Errorf("jwt: sign access token: %w", err)
-	}
-
-	return signed, nil
 }
 
 // generateRefreshToken returns a 256-bit cryptographically secure opaque token.
@@ -143,57 +126,20 @@ func (m *manager[T]) refreshKey(token string) string {
 
 // storeRefresh stores only the hash of the actual refresh token as part
 // of the Redis key. Redis never receives the usable refresh credential.
-func (m *manager[T]) storeRefresh(
-	ctx context.Context,
-	token string,
-	payload T,
-) error {
+func (m *manager[T]) storeRefresh(ctx context.Context, token string, payload T) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("jwt: marshal refresh payload: %w", err)
+		return err
 	}
-
-	if err := m.redis.Set(
-		ctx,
-		m.refreshKey(token),
-		data,
-		m.cfg.RefreshTTL,
-	).Err(); err != nil {
-		return fmt.Errorf("jwt: store refresh token: %w", err)
-	}
-
-	return nil
-}
-
-// consumeRefresh atomically retrieves and deletes a refresh session.
-//
-// GETDEL means two concurrent refresh requests using the same token cannot
-// both succeed.
-func (m *manager[T]) consumeRefresh(
-	ctx context.Context,
-	token string,
-) (T, error) {
-	var zero T
-
-	data, err := m.redis.GetDel(
-		ctx,
-		m.refreshKey(token),
-	).Bytes()
-
-	if errors.Is(err, redis.Nil) {
-		return zero, ErrInvalidRefreshToken
-	}
-
+	keys := m.familyKeys(token)
+	n, err := familyCreate.Run(ctx, m.redis, keys, data, m.familyTTL().Milliseconds(), hashRefreshToken(token), m.cfg.RefreshTTL.Milliseconds()).Int()
 	if err != nil {
-		return zero, fmt.Errorf("jwt: consume refresh token: %w", err)
+		return fmt.Errorf("jwt: persist family: %w", err)
 	}
-
-	var payload T
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return zero, fmt.Errorf("jwt: unmarshal refresh payload: %w", err)
+	if n != 1 {
+		return ErrInvalidRefreshToken
 	}
-
-	return payload, nil
+	return nil
 }
 
 func (m *manager[T]) deleteRefresh(
@@ -204,11 +150,13 @@ func (m *manager[T]) deleteRefresh(
 		return nil
 	}
 
-	if err := m.redis.Del(
-		ctx,
-		m.refreshKey(token),
-	).Err(); err != nil {
-		return fmt.Errorf("jwt: delete refresh token: %w", err)
+	key := m.familyKeys(token)[1]
+	if !strings.Contains(token, ".") {
+		key = m.refreshKey(token)
+		return m.redis.Del(ctx, key).Err()
+	}
+	if err := m.redis.SetArgs(ctx, key, "REVOKED", redis.SetArgs{Mode: "XX", KeepTTL: true}).Err(); err != nil && !errors.Is(err, redis.Nil) {
+		return err
 	}
 
 	return nil
@@ -266,12 +214,7 @@ func (m *manager[T]) Login(
 	c *gin.Context,
 	payload T,
 ) error {
-	access, err := createAccessToken(
-		payload,
-		m.cfg.AccessTTL,
-		m.cfg.Issuer,
-		[]byte(m.cfg.SecretKey),
-	)
+	access, err := m.signAccess(payload)
 	if err != nil {
 		return err
 	}
@@ -280,6 +223,12 @@ func (m *manager[T]) Login(
 	if err != nil {
 		return err
 	}
+
+	family, err := generateRefreshToken()
+	if err != nil {
+		return err
+	}
+	refresh = family + "." + refresh
 
 	if err := m.storeRefresh(
 		c.Request.Context(),
@@ -304,7 +253,7 @@ func (m *manager[T]) Login(
 		c,
 		refreshCookieName,
 		refresh,
-		m.cfg.RefreshTTL,
+		m.familyTTL(),
 		m.cfg.RefreshTokenPath,
 		m.cfg.CookieDomain,
 		m.cfg.CookieSecure,
@@ -316,24 +265,70 @@ func (m *manager[T]) Login(
 
 // Refresh consumes the current refresh token and rotates it.
 //
-// Once consumeRefresh succeeds, the old token is permanently invalid.
-// If creating/storing the replacement token then fails, the user must log
-// in again. This intentionally fails secure.
+// Signing and serialization finish before the atomic Redis transition.
+// Delivery can still be lost if the network fails after Redis commits.
 func (m *manager[T]) Refresh(c *gin.Context) error {
-	refresh, err := c.Cookie(refreshCookieName)
+	old, err := m.extract(c, refreshCookieName)
 	if err != nil {
 		return ErrMissingRefreshToken
 	}
-
-	payload, err := m.consumeRefresh(
-		c.Request.Context(),
-		refresh,
-	)
+	parts := strings.Split(old, ".")
+	if len(parts) > 2 {
+		return ErrInvalidRefreshToken
+	}
+	for _, p := range parts {
+		if !token.ValidOpaque(p) {
+			return ErrInvalidRefreshToken
+		}
+	}
+	ctx := c.Request.Context()
+	keys := m.familyKeys(old)
+	data, err := m.redis.Get(ctx, keys[0]).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return ErrInvalidRefreshToken
+	}
 	if err != nil {
 		return err
 	}
-
-	return m.Login(c, payload)
+	if strings.HasPrefix(string(data), "USED:") {
+		_, err = familyReplay.Run(ctx, m.redis, keys, m.replayGrace().Milliseconds()).Result()
+		if err != nil {
+			return err
+		}
+		return ErrInvalidRefreshToken
+	}
+	var payload T
+	if err = json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("jwt: corrupt refresh state: %w", err)
+	}
+	access, err := m.signAccess(payload)
+	if err != nil {
+		return err
+	}
+	secret, err := generateRefreshToken()
+	if err != nil {
+		return err
+	}
+	replacement := secret
+	if parts := strings.Split(old, "."); len(parts) == 2 {
+		replacement = parts[0] + "." + secret
+	} else {
+		family, e := generateRefreshToken()
+		if e != nil {
+			return e
+		}
+		replacement = family + "." + secret
+	}
+	next := m.familyKeys(replacement)
+	n, err := familyRotate.Run(ctx, m.redis, []string{keys[0], next[0], keys[1], next[1]}, data, hashRefreshToken(old), hashRefreshToken(replacement), m.cfg.RefreshTTL.Milliseconds(), strings.Contains(old, ".")).Int()
+	if err != nil {
+		return fmt.Errorf("jwt: atomic rotation: %w", err)
+	}
+	if n != 1 {
+		return ErrInvalidRefreshToken
+	}
+	m.deliver(c, access, replacement)
+	return nil
 }
 
 // Logout revokes the current refresh session and clears both cookies.
@@ -341,9 +336,12 @@ func (m *manager[T]) Refresh(c *gin.Context) error {
 // Cookies are cleared even when Redis revocation fails so the local browser
 // still loses its credentials. The Redis error is returned to the caller.
 func (m *manager[T]) Logout(c *gin.Context) error {
-	refresh, cookieErr := c.Cookie(refreshCookieName)
+	refresh, cookieErr := m.extract(c, refreshCookieName)
 
 	var revokeErr error
+	if cookieErr != nil && !errors.Is(cookieErr, transport.ErrMissing) {
+		revokeErr = cookieErr
+	}
 
 	if cookieErr == nil {
 		revokeErr = m.deleteRefresh(

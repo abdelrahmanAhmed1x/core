@@ -22,6 +22,9 @@ type errorItem struct {
 
 // JSON sends a success response wrapped in the standard envelope.
 func json[T any](c *gin.Context, status int, data T) {
+	if c.Writer.Written() {
+		return
+	}
 	c.JSON(status, response[T]{
 		Success: true,
 		Data:    data,

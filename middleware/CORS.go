@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +34,10 @@ func CORS(cfg CORSConfig) gin.HandlerFunc {
 			return
 		}
 
-		if _, ok := origins[origin]; !ok {
+		_, allowed := origins[origin]
+		_, wildcard := origins["*"]
+		c.Writer.Header().Add("Vary", "Origin")
+		if !allowed && !wildcard {
 			if c.Request.Method == http.MethodOptions {
 				c.AbortWithStatus(http.StatusForbidden)
 				return
@@ -46,8 +49,11 @@ func CORS(cfg CORSConfig) gin.HandlerFunc {
 
 		h := c.Writer.Header()
 
-		h.Set("Access-Control-Allow-Origin", origin)
-		h.Add("Vary", "Origin")
+		if wildcard {
+			h.Set("Access-Control-Allow-Origin", "*")
+		} else {
+			h.Set("Access-Control-Allow-Origin", origin)
+		}
 
 		if methods != "" {
 			h.Set("Access-Control-Allow-Methods", methods)
@@ -72,7 +78,25 @@ func CORS(cfg CORSConfig) gin.HandlerFunc {
 			)
 		}
 
-		if c.Request.Method == http.MethodOptions {
+		if c.Request.Method == http.MethodOptions && c.GetHeader("Access-Control-Request-Method") != "" {
+			h.Add("Vary", "Access-Control-Request-Method")
+			h.Add("Vary", "Access-Control-Request-Headers")
+			if _, ok := makeSet(cfg.AllowedMethods)[c.GetHeader("Access-Control-Request-Method")]; !ok {
+				c.AbortWithStatus(403)
+				return
+			}
+			permitted := makeSet(nil)
+			for _, v := range cfg.AllowedHeaders {
+				permitted[strings.ToLower(v)] = struct{}{}
+			}
+			for _, v := range strings.Split(c.GetHeader("Access-Control-Request-Headers"), ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					if _, ok := permitted[strings.ToLower(v)]; !ok {
+						c.AbortWithStatus(403)
+						return
+					}
+				}
+			}
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}

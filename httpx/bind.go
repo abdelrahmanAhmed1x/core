@@ -14,7 +14,7 @@ func formatBindError(err error) any {
 		}
 		return out
 	}
-	return err.Error()
+	return "Malformed input"
 }
 
 // BindJSON attempts to bind request JSON to struct T.

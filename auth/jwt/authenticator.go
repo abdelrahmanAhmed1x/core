@@ -11,8 +11,8 @@ type Authenticator[T any] interface {
 	Middleware() gin.HandlerFunc
 
 	//lenient optional auth:
-    //missing token→ guest
-    // bad token→ guest
+	//missing token→ guest
+	// bad token→ guest
 	// no token->guest
 	OptionalMiddleware() gin.HandlerFunc
 
@@ -41,6 +41,7 @@ func New[T any](
 
 	applyDefaults(&cfg)
 	validateConfig(cfg)
+	cfg.AllowedOrigins = append([]string(nil), cfg.AllowedOrigins...)
 
 	return &manager[T]{
 		redis: client,

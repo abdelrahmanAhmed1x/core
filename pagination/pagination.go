@@ -14,6 +14,9 @@ func (q *Query) EnsureDefaults() {
 	if q.Page <= 0 {
 		q.Page = 1
 	}
+	if q.Limit > 100 {
+		q.Limit = 100
+	}
 	if q.Limit <= 0 {
 		q.Limit = 10
 	}
@@ -21,6 +24,10 @@ func (q *Query) EnsureDefaults() {
 
 // Offset calculates the SQL/Database offset.
 func (q Query) Offset() int {
+	q.EnsureDefaults()
+	if q.Page-1 > math.MaxInt/q.Limit {
+		return math.MaxInt
+	}
 	return (q.Page - 1) * q.Limit
 }
 
@@ -41,12 +48,18 @@ type Result[T any] struct {
 // NewResult constructs a Result[T] with calculated total pages.
 func NewResult[T any](items []T, totalItems int, q Query) Result[T] {
 	q.EnsureDefaults()
-    if items == nil {
+	if items == nil {
 		items = []T{}
 	}
 	totalPages := 0
 	if q.Limit > 0 {
-		totalPages = int(math.Ceil(float64(totalItems) / float64(q.Limit)))
+		if totalItems < 0 {
+			totalItems = 0
+		}
+		totalPages = totalItems / q.Limit
+		if totalItems%q.Limit != 0 {
+			totalPages++
+		}
 	}
 
 	if items == nil {

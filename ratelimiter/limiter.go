@@ -1,9 +1,13 @@
 package ratelimiter
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/abdelrahmanAhmed1x/core/httpx"
@@ -32,8 +36,11 @@ type limiter struct {
 }
 
 func New(client redis.UniversalClient) *limiter {
+	if client == nil {
+		panic("ratelimiter: nil client")
+	}
 	return &limiter{
-		limiter: redis_rate.NewLimiter(client),
+		limiter: redis_rate.NewLimiter(compatibleClient{client}),
 	}
 }
 
@@ -99,6 +106,12 @@ func (l *limiter) Middleware(
 
 	return func(c *gin.Context) {
 		key := keyfn(c)
+		if key == "" {
+			c.AbortWithStatus(400)
+			return
+		}
+		digest := sha256.Sum256([]byte(key))
+		key = hex.EncodeToString(digest[:])
 
 		result, err := l.limiter.Allow(
 			c.Request.Context(),
@@ -114,6 +127,7 @@ func (l *limiter) Middleware(
 			return
 		}
 		if result.Allowed == 0 {
+			c.Header("Retry-After", strconv.FormatInt(int64(math.Ceil(result.RetryAfter.Seconds())), 10))
 			httpx.AbortTooManyRequests(c)
 			return
 		}

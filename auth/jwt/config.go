@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"github.com/abdelrahmanAhmed1x/core/auth/transport"
 	"net/http"
 	"time"
 )
@@ -10,10 +11,19 @@ import (
 // Redis is intentionally not part of Config. The Redis client is supplied
 // directly to New because it is an infrastructure dependency.
 type Config struct {
-	SecretKey  string
-	Issuer     string
-	AccessTTL  time.Duration
-	RefreshTTL time.Duration
+	// Audience is optional for compatibility; set it to require an audience.
+	Audience string
+	// FamilyTTL bounds the full refresh family lifetime (defaults to RefreshTTL).
+	FamilyTTL time.Duration
+	// ReplayGrace bounds concurrent-refresh rejection before family revocation (default 5s).
+	ReplayGrace time.Duration
+	// AllowedOrigins enables Origin validation on cookie-authenticated writes.
+	// Empty retains legacy behavior; applications must supply CSRF middleware.
+	AllowedOrigins []string
+	SecretKey      string
+	Issuer         string
+	AccessTTL      time.Duration
+	RefreshTTL     time.Duration
 
 	CookieDomain   string
 	CookiePath     string
@@ -32,7 +42,6 @@ type Config struct {
 	// then "/auth" is a good value.
 	RefreshTokenPath string
 }
-
 
 func applyDefaults(cfg *Config) {
 	if cfg.AccessTTL == 0 {
@@ -57,6 +66,14 @@ func applyDefaults(cfg *Config) {
 }
 
 func validateConfig(cfg Config) {
+	for _, o := range cfg.AllowedOrigins {
+		if !transport.ValidateOrigin(o) {
+			panic("jwt: invalid allowed origin")
+		}
+	}
+	if (cfg.FamilyTTL > 0 && cfg.FamilyTTL < time.Millisecond) || cfg.RefreshTTL < time.Millisecond || cfg.AccessTTL < time.Second || cfg.FamilyTTL < 0 || cfg.ReplayGrace < 0 {
+		panic("jwt: invalid family timing")
+	}
 	if cfg.SecretKey == "" {
 		panic("jwt: secret key cannot be empty")
 	}
