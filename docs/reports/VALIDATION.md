@@ -84,17 +84,20 @@ installed Go 1.27.1 found reachable advisories. Patched the existing dependencie
 quic-go 0.59.0 → 0.59.1 and x/net 0.51.0 → 0.60.0, with compatible x/crypto,
 x/sync, x/sys and x/text upgrades pinned by go.mod/go.sum.
 
-Final scan on **Go 1.26.9** reports **zero reachable vulnerabilities and zero
+The recorded scan on **Go 1.26.9** reported **zero reachable vulnerabilities and zero
 advisories in imported packages**. It reports one module-only advisory,
 GO-2026-5932, for the unmaintained x/crypto/openpgp package, which Core does not
 import or call; no fixed version exists. Saved output: govulncheck.txt.
 
 Go 1.26.5 remains the source compatibility minimum, not a recommended deployment
-patch level. Deploy using patched Go 1.26.9 or 1.27.2+ and keep scanning. CI tests
-both 1.26.5 and 1.26.9, and runs the vulnerability gate on 1.26.9. Official advisory
+patch level. Deploy using Go 1.26.10 or 1.27.3 or a later patched release, and keep
+scanning. CI tests both 1.26.5 and 1.26.10, and runs the vulnerability gate and
+integration tests on 1.26.10. The earlier recorded scan predates GO-2026-6809,
+which requires this toolchain update. Official advisory
 references: [Go HTTP fixes](https://pkg.go.dev/vuln/GO-2026-6613),
 [x/net HTTP/2 fixes](https://pkg.go.dev/vuln/GO-2026-6617),
-[quic-go fix](https://pkg.go.dev/vuln/GO-2026-5676).
+[quic-go fix](https://pkg.go.dev/vuln/GO-2026-5676),
+[x509 certificate fix](https://pkg.go.dev/vuln/GO-2026-6809).
 
 ## Benchmark environment and interpretation
 

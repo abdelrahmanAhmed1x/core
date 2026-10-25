@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        go: ['1.26.5', '1.26.9']
+        go: ['1.26.5', '1.26.10']
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-go@v5.5.0
@@ -19,9 +19,9 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - run: go test -coverpkg=./... -coverprofile=coverage.out ./...
-      - if: matrix.go == '1.26.9'
+      - if: matrix.go == '1.26.10'
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-      - if: matrix.go == '1.26.9'
+      - if: matrix.go == '1.26.10'
         run: govulncheck ./...
   integration:
     runs-on: ubuntu-24.04
@@ -33,5 +33,5 @@ jobs:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-go@v5.5.0
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - run: scripts/integration.sh '${{ matrix.image }}'
