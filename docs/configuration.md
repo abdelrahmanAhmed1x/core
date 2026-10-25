@@ -14,6 +14,10 @@ application. Shared transport and codec settings are described once below.
 
 ## `auth/stateful`
 
+Use `New[T](redisClient, config)` for the included Redis store, or
+`NewWithStore[T](sessionStore, config)` for an application-defined `SessionStore`.
+The same configuration applies to both constructors.
+
 | Field or argument | Default / requirement | Controls |
 |---|---|---|
 | `Namespace` | required | Separate the application’s session keys. |

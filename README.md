@@ -123,7 +123,7 @@ without Redis. All marked snippets are [compile checked](examples/handbook/handb
 
 | Strategy | Credential | Store | Logout/revocation | Refresh |
 |---|---|---|---|---|
-| Stateful | Opaque session | Redis/DragonflyDB | Yes | Idle renewal |
+| Stateful | Opaque session | Pluggable (Redis/DragonflyDB included) | Yes | Idle renewal |
 | Hybrid | JWT access, opaque refresh | Redis/DragonflyDB | Refresh state only | Yes |
 | Stateless | Two JWTs | None | No individual revocation | Yes, reusable |
 | Single | One JWT | None | No individual revocation | None |
@@ -151,7 +151,7 @@ in handlers. Application permissions are separate from login.
 
 ### `auth/stateful`
 
-**What it does:** Opaque login sessions stored in Redis or DragonflyDB. Sessions support logout and revocation. **When to use it:** Web/mobile applications where users need device logout or logout-all.
+**What it does:** Opaque login sessions with pluggable storage; Redis and DragonflyDB are supported out of the box. Sessions support logout and revocation. **When to use it:** Web/mobile applications where users need device logout or logout-all.
 
 **How to use it:**
 
@@ -175,7 +175,9 @@ if err != nil {
 
 | API | Purpose |
 |---|---|
-| `New[T](client, Config)` | Create a session manager. |
+| `New[T](client, Config)` | Create a Redis-backed session manager. |
+| `NewWithStore[T](SessionStore, Config)` | Create a manager with your own session storage. |
+| `NewRedisStore(client)` | Build the included `SessionStore` implementation. |
 | `Create / Verify` | Issue a session credential / look it up. |
 | `Renew / Revoke / RevokeAll` | Extend idle lifetime / revoke one session / revoke a user’s sessions. |
 | `Login / Logout` | Set or clear browser credentials and update stored sessions. |
@@ -183,7 +185,7 @@ if err != nil {
 
 **Configuration:** `Namespace` and `AbsoluteTTL` are required. `IdleTTL=0` disables idle expiry; `OperationTimeout` defaults to `3s`. `Transport` controls cookies. [All options](docs/configuration.md#auth-stateful).
 
-**Important notes:** Protected requests fail when Redis is unavailable. Renewal never extends the original maximum session age. For browser writes, set `Transport.AllowedOrigins`; send bearer credentials from native clients. [More](docs/authentication.md#stateful-sessions).
+**Important notes:** Protected requests fail when the session store is unavailable. Renewal never extends the original maximum session age. For browser writes, set `Transport.AllowedOrigins`; send bearer credentials from native clients. [More](docs/authentication.md#stateful-sessions).
 
 <a id="auth-jwt"></a>
 

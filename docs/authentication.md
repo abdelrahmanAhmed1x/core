@@ -38,9 +38,42 @@ Both transports use the same store. Do not log the credential.
 
 Verification does not automatically renew idle expiry. If your application wants
 sliding activity, call Renew explicitly at the chosen interval. IdleTTL=0 disables
-idle expiry. Redis TIME is used to check stored absolute/idle times as well as TTL.
+idle expiry. Stores enforce absolute/idle expiry independently of physical cleanup.
+The included Redis store uses Redis TIME as well as TTL.
 Malformed, expired, revoked, missing or corrupted sessions match stateful.ErrInvalid
 (the same sentinel as transport.ErrInvalid). Storage errors remain distinct errors.
+
+### Custom session storage
+
+`Manager[T]` depends on `stateful.SessionStore`. Use the existing `New[T](client,
+config)` for Redis/DragonflyDB, or inject your application's implementation:
+
+```go
+// Your repository implements stateful.SessionStore.
+auth := stateful.NewWithStore[User](sessionRepository, stateful.Config{
+    Namespace: "shop:sessions", AbsoluteTTL: 24 * time.Hour,
+})
+```
+
+`stateful.NewRedisStore(client)` exposes the included implementation directly.
+The caller owns store/client initialization and shutdown. There is no PostgreSQL
+implementation or schema requirement; an application can implement the interface
+using its own repository and tables.
+
+The manager generates credentials, hashes credentials and user IDs, encodes the
+generic payload as JSON, and applies operation deadlines. The store receives a
+`CreateRequest` containing the namespace, hashes, JSON bytes, and expiry durations.
+It returns JSON bytes for Verify/Renew; it does not need to know the payload type.
+
+Implement the full session operations atomically, including validation and idle
+renewal. Create must reject collisions with `ErrCollision` without overwriting.
+Verify/Renew must return `ErrInvalid` for missing, expired, revoked, or corrupt
+sessions; preserve infrastructure errors so middleware can return 503. Revoke is
+idempotent. Namespace isolation, context cancellation, concurrent safety, and an
+authoritative clock are part of the contract. Never extend absolute expiry or
+resurrect a session through renewal. Managers sharing a namespace must use the
+same AbsoluteTTL so revocation-state retention covers their sessions. See
+[`SessionStore`](../auth/stateful/store.go) for the complete method contract.
 
 ### Revocation and concurrent creation
 
@@ -49,17 +82,17 @@ cancel an action that already authenticated. Create and RevokeAll have a defined
 order: sessions created before revoke-all are invalidated; sessions created after
 it remain valid. There is no promise that a concurrent login is rejected.
 
-Each user has a random, expiring generation. Session creation extends its retention
-as needed, while sessions keep their original absolute expiry. There is no session
+In the included Redis store, each user has a random, expiring generation. Session
+creation extends its retention as needed, while sessions keep their original absolute expiry. There is no session
 index to enumerate or leak. Missing generation state fails closed.
 
-Tokens use 32 crypto/rand bytes and canonical URL-safe base64. Redis sees hashed
-verifiers, not the raw credential. The payload is JSON inside a string so Redis
-metadata processing does not round large integer fields. Payloads are not encrypted;
+Tokens use 32 crypto/rand bytes and canonical URL-safe base64. Stores see hashed
+verifiers, not the raw credential. In Redis, the payload is JSON inside a string
+so Redis metadata processing does not round large integer fields. Payloads are not encrypted;
 keep them small and free of secrets.
 
-All keys in one namespace share a Redis Cluster slot so operations involving a
-session and generation can be atomic. This limits distribution within a namespace;
+With RedisStore, all keys in one namespace share a Redis Cluster slot so operations
+involving a session and generation can be atomic. This limits distribution within a namespace;
 partition namespaces where appropriate. Session checks never use the application
 L1 cache. Redis persistence, eviction and failover decisions remain part of the
 authentication deployment, not automatic guarantees from this manager.

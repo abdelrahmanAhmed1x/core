@@ -63,6 +63,7 @@ func TestSessions(t *testing.T) {
 }
 func TestExpirationRenewCorruption(t *testing.T) {
 	m := manager(t)
+	store := m.store.(*RedisStore)
 	ctx := context.Background()
 	s, e := m.Create(ctx, "u", 1)
 	if e != nil {
@@ -84,7 +85,7 @@ func TestExpirationRenewCorruption(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = m.client.Set(ctx, m.key(s), "{broken", time.Minute).Err(); e != nil {
+	if e = store.client.Set(ctx, store.key(m.cfg.Namespace, token.Hash(s)), "{broken", time.Minute).Err(); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = m.Verify(ctx, s); !errors.Is(e, ErrInvalid) {
@@ -131,19 +132,48 @@ func TestFailClosed(t *testing.T) {
 }
 func TestCollision(t *testing.T) {
 	m := manager(t)
+	store := m.store.(*RedisStore)
 	ctx := context.Background()
-	keys := []string{m.prefix + "collision", m.prefix + "epoch"}
-	if e := m.client.Set(ctx, keys[0], "existing", time.Second).Err(); e != nil {
-		t.Fatal(e)
+	req := CreateRequest{Namespace: m.cfg.Namespace, TokenHash: token.Hash("collision"), UserHash: token.Hash("u"), Payload: []byte("1"), AbsoluteTTL: time.Second}
+	if err := store.Create(ctx, req); err != nil {
+		t.Fatal(err)
 	}
-	n, e := create.Run(ctx, m.client, keys, `{"payload":"1","user":"u"}`, "e", 1000, 0).Int()
-	if e != nil || n != 0 {
-		t.Fatal(n, e)
+	req.Payload = []byte("2")
+	if err := store.Create(ctx, req); !errors.Is(err, ErrCollision) {
+		t.Fatal(err)
 	}
-	if s := m.client.Get(ctx, keys[0]).Val(); s != "existing" {
-		t.Fatal("collision overwrote data")
+	payload, err := store.Verify(ctx, req.Namespace, req.TokenHash)
+	if err != nil || string(payload) != "1" {
+		t.Fatal("collision overwrote data", string(payload), err)
 	}
 }
+
+func TestRedisStoreNamespaces(t *testing.T) {
+	store := NewRedisStore(testredis.Client(t))
+	namespace := fmt.Sprintf("namespaces-%d", time.Now().UnixNano())
+	cfg := Config{Namespace: namespace, AbsoluteTTL: time.Minute}
+	a := NewWithStore[int](store, cfg)
+	cfg.Namespace += ":other"
+	b := NewWithStore[int](store, cfg)
+	ctx := context.Background()
+	raw, err := a.Create(ctx, "u", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Verify(ctx, raw); !errors.Is(err, ErrInvalid) {
+		t.Fatal("namespace leaked", err)
+	}
+	if err := b.Revoke(ctx, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.RevokeAll(ctx, "u"); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := a.Verify(ctx, raw); err != nil || value != 1 {
+		t.Fatal("cross-namespace revocation", value, err)
+	}
+}
+
 func BenchmarkCreate(b *testing.B) {
 	m := manager(b)
 	ctx := context.Background()
@@ -176,12 +206,13 @@ func BenchmarkVerify(b *testing.B) {
 
 func TestLogicalExpirationAndStateLoss(t *testing.T) {
 	m := manager(t)
+	store := m.store.(*RedisStore)
 	ctx := context.Background()
 	s, e := m.Create(ctx, "u", 1)
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw, e := m.client.Get(ctx, m.key(s)).Bytes()
+	raw, e := store.client.Get(ctx, store.key(m.cfg.Namespace, token.Hash(s))).Bytes()
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -194,7 +225,7 @@ func TestLogicalExpirationAndStateLoss(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = m.client.Set(ctx, m.key(s), raw, time.Minute).Err(); e != nil {
+	if e = store.client.Set(ctx, store.key(m.cfg.Namespace, token.Hash(s)), raw, time.Minute).Err(); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = m.Verify(ctx, s); !errors.Is(e, ErrInvalid) {
@@ -204,7 +235,7 @@ func TestLogicalExpirationAndStateLoss(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = m.client.Del(ctx, m.prefix+"user:"+token.Hash("u")).Err(); e != nil {
+	if e = store.client.Del(ctx, store.prefix(m.cfg.Namespace)+"user:"+token.Hash("u")).Err(); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = m.Verify(ctx, s); !errors.Is(e, ErrInvalid) {
@@ -232,6 +263,7 @@ func TestAbsoluteRenewalBound(t *testing.T) {
 func TestWebMobileAdapters(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	m := manager(t)
+	store := m.store.(*RedisStore)
 	m.cfg.Transport.AllowedOrigins = []string{"https://app.example"}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -280,7 +312,7 @@ func TestWebMobileAdapters(t *testing.T) {
 	if _, e := m.Verify(context.Background(), credential); !errors.Is(e, ErrInvalid) {
 		t.Fatal(e)
 	}
-	m.client.Close()
+	store.client.Close()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+credential)
 	w = httptest.NewRecorder()
